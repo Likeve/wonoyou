@@ -124,13 +124,15 @@ export class ChatEngine {
       if (!c) {
         c = {
           id: remote.id,
-          name: "新朋友",
+          name: remote.name || "新朋友",
           publicKey: remote.publicKey,
           active: true,
         };
         this.state.contacts.push(c);
       } else {
         c.publicKey = remote.publicKey;
+        if (typeof remote.name === "string" && remote.name)
+          c.name = remote.name;
         c.active =
           !c.blocked &&
           !c.keyChanged &&

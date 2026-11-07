@@ -65,7 +65,12 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       const values = await redis.mget(...peers.flatMap(p => [key("device:" + p), key("presence:" + p)]));
       return peers.map((p, i) => {
         const d = parseDevice(values[i * 2]);
-        return { id: p, publicKey: d?.publicKey, online: !!values[i * 2 + 1] };
+        return {
+          id: p,
+          name: d?.name || "",
+          publicKey: d?.publicKey,
+          online: !!values[i * 2 + 1],
+        };
       });
     },
     async device(id) {

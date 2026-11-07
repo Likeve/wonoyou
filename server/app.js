@@ -143,6 +143,7 @@ export function createApp({
       .all(id, id, id)
       .map((d) => ({
         id: d.id,
+        name: d.name || "",
         publicKey: d.public_key,
         online: sockets.has(d.id),
       }));

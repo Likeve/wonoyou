@@ -94,9 +94,9 @@ test("invalid proof and replayed challenge are rejected", async () => {
   );
 });
 test("identity code adds both sides, is idempotent, and is reusable", async () => {
-  const a = await identity(),
-    b = await identity(),
-    c = await identity();
+  const a = await identity("小林"),
+    b = await identity("阿青"),
+    c = await identity("路人");
   const add = (from, peer) =>
     request("contacts", {
       method: "POST",
@@ -108,6 +108,10 @@ test("identity code adds both sides, is idempotent, and is reusable", async () =
   assert.equal(
     (await request("contacts", { token: b.token })).contacts[0].id,
     a.id,
+  );
+  assert.equal(
+    (await request("contacts", { token: b.token })).contacts[0].name,
+    "小林",
   );
   // The identity code is public and long-lived: anyone else may add the same person.
   assert.equal((await add(c, b)).status, 200);
