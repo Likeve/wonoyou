@@ -93,98 +93,64 @@ test("invalid proof and replayed challenge are rejected", async () => {
     401,
   );
 });
-test("one-sided invite adds both sides, is idempotent, and cannot be stolen", async () => {
+test("identity code adds both sides, is idempotent, and is reusable", async () => {
   const a = await identity(),
     b = await identity(),
-    c = await identity(),
-    inv = await request("invites", { method: "POST", token: b.token });
-  assert.match(inv.code, /^INOU-/);
-  const add = () =>
+    c = await identity();
+  const add = (from, peer) =>
     request("contacts", {
       method: "POST",
-      token: a.token,
-      body: { code: inv.code },
+      token: from.token,
+      body: { id: peer.id },
     });
-  assert.equal((await add()).id, b.id);
-  assert.equal((await add()).status, 200);
+  assert.equal((await add(a, b)).id, b.id);
+  assert.equal((await add(a, b)).status, 200);
   assert.equal(
     (await request("contacts", { token: b.token })).contacts[0].id,
     a.id,
   );
+  // The identity code is public and long-lived: anyone else may add the same person.
+  assert.equal((await add(c, b)).status, 200);
+});
+test("self-add, malformed and unknown identity codes are rejected", async () => {
+  const a = await identity();
   assert.equal(
     (
       await request("contacts", {
         method: "POST",
-        token: c.token,
-        body: { code: inv.code },
+        token: a.token,
+        body: { id: a.id },
       })
     ).status,
     400,
   );
-  const stored = service.db
-    .prepare("SELECT * FROM invites WHERE owner=?")
-    .get(b.id);
-  assert.equal(stored.hash.includes(inv.code), false);
-});
-test("concurrent redemption has exactly one winner", async () => {
-  const a = await identity(),
-    b = await identity(),
-    c = await identity(),
-    inv = await request("invites", { method: "POST", token: b.token });
-  const results = await Promise.all(
-    [a, c].map((x) =>
-      request("contacts", {
+  assert.equal(
+    (
+      await request("contacts", {
         method: "POST",
-        token: x.token,
-        body: { code: inv.code },
-      }),
-    ),
+        token: a.token,
+        body: { id: "not-a-code" },
+      })
+    ).status,
+    400,
   );
-  assert.deepEqual(results.map((r) => r.status).sort(), [200, 400]);
+  assert.equal(
+    (
+      await request("contacts", {
+        method: "POST",
+        token: a.token,
+        body: { id: "f".repeat(64) },
+      })
+    ).status,
+    400,
+  );
 });
-test("revocation, expiry, self-add and block cannot establish a relation", async () => {
+test("block prevents adding and re-adding after unblock", async () => {
   const a = await identity(),
     b = await identity();
-  let inv = await request("invites", { method: "POST", token: b.token });
-  assert.equal(
-    (
-      await request("contacts", {
-        method: "POST",
-        token: b.token,
-        body: { code: inv.code },
-      })
-    ).status,
-    400,
-  );
-  await request("invites", { method: "DELETE", token: b.token });
-  assert.equal(
-    (
-      await request("contacts", {
-        method: "POST",
-        token: a.token,
-        body: { code: inv.code },
-      })
-    ).status,
-    400,
-  );
-  inv = await request("invites", { method: "POST", token: b.token });
-  service.db.prepare("UPDATE invites SET expires=0 WHERE owner=?").run(b.id);
-  assert.equal(
-    (
-      await request("contacts", {
-        method: "POST",
-        token: a.token,
-        body: { code: inv.code },
-      })
-    ).status,
-    400,
-  );
-  inv = await request("invites", { method: "POST", token: b.token });
-  await request("contacts", {
-    method: "POST",
-    token: a.token,
-    body: { code: inv.code },
-  });
+  const add = () =>
+    request("contacts", { method: "POST", token: a.token, body: { id: b.id } });
+  assert.equal((await add()).status, 200);
   await request("contacts/" + b.id + "?block=true", {
     method: "DELETE",
     token: a.token,
@@ -193,17 +159,9 @@ test("revocation, expiry, self-add and block cannot establish a relation", async
     (await request("contacts", { token: b.token })).contacts.length,
     0,
   );
-  inv = await request("invites", { method: "POST", token: b.token });
-  assert.equal(
-    (
-      await request("contacts", {
-        method: "POST",
-        token: a.token,
-        body: { code: inv.code },
-      })
-    ).status,
-    400,
-  );
+  assert.equal((await add()).status, 400);
+  await request("blocks/" + b.id, { method: "DELETE", token: a.token });
+  assert.equal((await add()).status, 200);
 });
 test("signaling requires membership and ignores chat messages", async () => {
   const a = await identity(),

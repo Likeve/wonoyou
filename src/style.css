@@ -1060,7 +1060,7 @@ input::placeholder {
 .modal-tip svg {
   flex-shrink: 0;
 }
-.invite-code {
+.id-code {
   font-family: ui-monospace, monospace;
   font-size: 19px;
   line-height: 1.8;

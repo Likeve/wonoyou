@@ -21,16 +21,15 @@ async () => {
   await create(a, "小林");
   await create(b, "阿青");
   await b.getByRole("button", { name: "我", exact: true }).click();
-  await b.getByRole("button", { name: "我的邀请码", exact: true }).click();
-  await b.getByRole("button", { name: "生成邀请码" }).click();
-  await b.locator(".invite-code").waitFor();
-  const code = await b.locator(".invite-code").innerText();
+  await b.getByRole("button", { name: "我的身份码", exact: true }).click();
+  await b.locator(".id-code").waitFor();
+  const code = await b.locator(".id-code").innerText();
   await b.getByRole("button", { name: "关闭", exact: true }).click();
   await a
     .getByRole("button", { name: "添加好友", exact: true })
     .first()
     .click();
-  await a.getByLabel("好友邀请码").fill(code);
+  await a.getByLabel("对方身份码").fill(code);
   await a
     .getByRole("dialog")
     .getByRole("button", { name: "添加好友", exact: true })
@@ -156,7 +155,7 @@ async () => {
   const result = {
     passed: [
       "two identities",
-      "one-sided invite",
+      "identity code add",
       "authenticated WebRTC",
       "bidirectional delivery + ACK",
       "offline queue + reconnect",

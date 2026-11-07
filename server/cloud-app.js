@@ -7,7 +7,6 @@ import { createRedisStore, digest } from "./redis-store.js";
 
 const validId = (s) => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
 const fail = (res, status, message) => res.status(status).json({ error: message });
-const normalize = (s) => String(s).toUpperCase().replace(/[\s-]/g, "").replace(/^INOU/, "").replace(/O/g, "0").replace(/[IL]/g, "1");
 const importKey = (publicKey) => webcrypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
 
 export function createCloudApp({
@@ -100,24 +99,13 @@ export function createCloudApp({
   app.get("/api/contacts", async (req, res) => res.json({
     contacts: await store.contacts(req.deviceId), blocked: await store.blocked(req.deviceId),
   }));
-  app.post("/api/invites", async (req, res) => {
-    if (await store.limited("invite:" + req.deviceId, 10)) return fail(res, 429, "请稍后再生成");
-    const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    const code = Array.from(randomBytes(26), n => alphabet[n & 31]).join("");
-    await store.invite(digest(code), req.deviceId);
-    res.json({ code: "INOU-" + code.match(/.{1,5}/g).join("-"), expires: Date.now() + 86400000 });
-  });
-  app.delete("/api/invites", async (req, res) => {
-    await store.revokeInvites(req.deviceId); res.json({ ok: true });
-  });
   app.post("/api/contacts", async (req, res) => {
-    if (await store.limited("redeem:" + req.deviceId, 10)) return fail(res, 429, "尝试过多，请稍后再试");
-    const code = normalize(req.body?.code);
-    if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(code)) return fail(res, 400, "邀请码格式不正确");
-    let peer;
-    try { peer = await store.redeem(digest(code), req.deviceId); }
+    if (await store.limited("add:" + req.deviceId, 10)) return fail(res, 429, "尝试过多，请稍后再试");
+    const peer = String(req.body?.id || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (!/^[0-9a-f]{64}$/.test(peer)) return fail(res, 400, "身份码格式不正确");
+    try { await store.connect(req.deviceId, peer); }
     catch (e) {
-      if (/邀请码不可用|请使用新的邀请码|联系人数量已达上限/.test(e.message)) return fail(res, 400, e.message.replace(/^ERR /, ""));
+      if (/找不到该身份码|不能添加自己|暂时无法添加对方|联系人数量已达上限/.test(e.message)) return fail(res, 400, e.message.replace(/^ERR /, ""));
       throw e;
     }
     await store.publish({ type: "contacts", ids: [req.deviceId, peer] });

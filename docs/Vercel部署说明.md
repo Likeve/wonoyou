@@ -17,7 +17,7 @@
 - 数据服务：Upstash Redis，`upstash-kv-coral-feather`，当前为 Free 方案。
 - 静态前端：Vite + React + PWA；`api/backend.js` 导出 Node HTTP Server，承接 `/api/*` 和 `/signal`。
 - 本地默认服务仍使用 SQLite；Vercel 服务使用 Redis，不读写本机 `.data`。
-- Redis 保存设备公钥、邀请码校验值、好友/封禁关系，以及有过期时间的认证、限流和在线状态。聊天正文、图片、昵称、身份私钥和备份口令不进入这些数据结构。
+- Redis 保存设备公钥、好友/封禁关系，以及有过期时间的认证、限流和在线状态。聊天正文、图片、昵称、身份私钥和备份口令不进入这些数据结构。
 - 信令通过 Redis Pub/Sub 实时转发；不使用消息队列、Streams 或历史消息存储。离线消息仍保留在发送设备，双方重新在线后传送。
 
 ## 环境变量
@@ -60,7 +60,7 @@ Vercel 函数的最长运行时间配置为 300 秒；达到上限时 WebSocket 
 node --env-file=.env.cloud-test.local --input-type=module -e 'import { spawn } from "node:child_process"; const child=spawn(process.execPath,["--test","test/cloud.test.js"],{stdio:"inherit",env:{...process.env,TEST_REDIS_URL:process.env.REDIS_URL||process.env.KV_URL}}); child.on("exit",code=>process.exit(code??1));'
 ```
 
-集成测试启动两个独立的 Node 服务实例，使用随机测试命名空间。覆盖跨实例挑战认证、挑战不可重放、邀请码并发核销与幂等、撤销/过期/封禁、信令权限、函数重启恢复，以及没有消息接口或信令落库。结束时仅清理本次测试的键，不执行 `FLUSHDB`。
+集成测试启动两个独立的 Node 服务实例，使用随机测试命名空间。覆盖跨实例挑战认证、挑战不可重放、身份码幂等添加、封禁、信令权限、函数重启恢复，以及没有消息接口或信令落库。结束时仅清理本次测试的键，不执行 `FLUSHDB`。
 
 浏览器验证可使用独立命名空间与端口，不影响原有 8787 本地应用：
 

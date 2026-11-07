@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { randomUUID, webcrypto } from "node:crypto";
 import { WebSocket } from "ws";
 import { createCloudApp } from "../server/cloud-app.js";
-import { digest } from "../server/redis-store.js";
 
 const url = process.env.TEST_REDIS_URL;
-test("cloud: shared authentication, atomic invites, cross-instance signaling and restart", { skip: !url, timeout: 180000 }, async () => {
+test("cloud: shared authentication, identity-code contacts, cross-instance signaling and restart", { skip: !url, timeout: 180000 }, async () => {
   const namespace = "inou-test-" + randomUUID();
   const services = [], clients = [];
   async function start() {
@@ -53,12 +52,9 @@ test("cloud: shared authentication, atomic invites, cross-instance signaling and
     const a = await start(), b = await start();
     assert.equal((await request(a, "contacts")).status, 401);
     const alice = await identity(a, b), bob = await identity(b, a), eve = await identity(a, b);
-    const inv = await request(a, "invites", { method: "POST", token: alice.token });
-    const race = await Promise.all([bob, eve].map(user => request(b, "contacts", { method: "POST", token: user.token, body: { code: inv.code } })));
-    assert.equal(race.filter(r => r.status === 200).length, 1);
-    const friend = race[0].status === 200 ? bob : eve;
-    const stranger = race[0].status === 200 ? eve : bob;
-    assert.equal((await request(a, "contacts", { method: "POST", token: friend.token, body: { code: inv.code } })).status, 200);
+    const friend = bob, stranger = eve;
+    assert.equal((await request(b, "contacts", { method: "POST", token: friend.token, body: { id: alice.id } })).status, 200);
+    assert.equal((await request(b, "contacts", { method: "POST", token: friend.token, body: { id: alice.id } })).status, 200);
     const contacts = await request(b, "contacts", { token: alice.token });
     assert.deepEqual(contacts.contacts.map(c => c.id), [friend.id]);
     const wsA = await connect(a, alice.token), wsB = await connect(b, friend.token);
@@ -72,13 +68,8 @@ test("cloud: shared authentication, atomic invites, cross-instance signaling and
     wsE.send(JSON.stringify({ type: "signal", to: friend.id, payload: "forbidden", signature: "test" }));
     wsA.send(JSON.stringify({ type: "message", to: friend.id, payload: "must-not-store" }));
     assert.equal((await request(b, "messages", { method: "POST", token: alice.token, body: { message: "must-not-store" } })).status, 404);
-    const revoked = await request(a, "invites", { method: "POST", token: stranger.token });
-    await request(b, "invites", { method: "DELETE", token: stranger.token });
-    assert.equal((await request(a, "contacts", { method: "POST", token: alice.token, body: { code: revoked.code } })).status, 400);
-    const expired = await request(a, "invites", { method: "POST", token: stranger.token });
-    const normalized = expired.code.replace(/^INOU-/, "").replaceAll("-", "");
-    await a.store.redis.expire(a.store.key("invite:" + digest(normalized)), 0);
-    assert.equal((await request(b, "contacts", { method: "POST", token: alice.token, body: { code: expired.code } })).status, 400);
+    assert.equal((await request(b, "contacts", { method: "POST", token: alice.token, body: { id: "f".repeat(64) } })).status, 400);
+    assert.equal((await request(b, "contacts", { method: "POST", token: alice.token, body: { id: alice.id } })).status, 400);
     // Force a function instance restart. Shared sessions and contacts must survive.
     await a.close(); services.splice(services.indexOf(a), 1);
     const restarted = await start();
@@ -89,8 +80,7 @@ test("cloud: shared authentication, atomic invites, cross-instance signaling and
     assert.equal((await afterRestart).payload, "after-restart");
     await request(restarted, "contacts/" + friend.id + "?block=true", { method: "DELETE", token: alice.token });
     wsRestarted.send(JSON.stringify({ type: "signal", to: friend.id, payload: "blocked", signature: "test" }));
-    const blockedInvite = await request(b, "invites", { method: "POST", token: friend.token });
-    assert.equal((await request(restarted, "contacts", { method: "POST", token: alice.token, body: { code: blockedInvite.code } })).status, 400);
+    assert.equal((await request(b, "contacts", { method: "POST", token: friend.token, body: { id: alice.id } })).status, 400);
     assert.equal((await request(b, "contacts", { token: friend.token })).contacts.length, 0);
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(forbidden, 0);

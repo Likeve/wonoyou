@@ -6,13 +6,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 const hash = (s) => createHash("sha256").update(s).digest("hex");
-const norm = (s) =>
-  String(s)
-    .toUpperCase()
-    .replace(/[\s-]/g, "")
-    .replace(/^INOU/, "")
-    .replace(/O/g, "0")
-    .replace(/[IL]/g, "1");
 const error = (res, status, message) =>
   res.status(status).json({ error: message });
 export function createApp({
@@ -24,7 +17,6 @@ export function createApp({
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, public_key TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS invites(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL, used_by TEXT);
  CREATE TABLE IF NOT EXISTS relations(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));
  CREATE TABLE IF NOT EXISTS blocks(owner TEXT NOT NULL,peer TEXT NOT NULL,PRIMARY KEY(owner,peer));`);
   const app = express(),
@@ -166,63 +158,27 @@ export function createApp({
         .map((v) => v.peer),
     }),
   );
-  app.post("/api/invites", (req, res) => {
-    if (limited("invite:" + req.deviceId, 10))
-      return error(res, 429, "请稍后再生成");
-    const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
-      code = Array.from(randomBytes(26), (n) => alphabet[n & 31]).join(""),
-      expires = Date.now() + 86400000;
-    db.prepare("INSERT INTO invites VALUES(?,?,?,NULL)").run(
-      hash(code),
-      req.deviceId,
-      expires,
-    );
-    res.json({ code: "INOU-" + code.match(/.{1,5}/g).join("-"), expires });
-  });
-  app.delete("/api/invites", (req, res) => {
-    db.prepare("DELETE FROM invites WHERE owner=? AND used_by IS NULL").run(
-      req.deviceId,
-    );
-    res.json({ ok: true });
-  });
   app.post("/api/contacts", (req, res) => {
-    if (limited("redeem:" + req.deviceId, 10))
+    if (limited("add:" + req.deviceId, 10))
       return error(res, 429, "尝试过多，请稍后再试");
-    const code = norm(req.body.code);
-    if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(code))
-      return error(res, 400, "邀请码格式不正确");
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      const inv = db
-          .prepare("SELECT * FROM invites WHERE hash=?")
-          .get(hash(code)),
-        id = req.deviceId;
-      if (
-        !inv ||
-        inv.expires < Date.now() ||
-        inv.owner === id ||
-        blocked(id, inv.owner) ||
-        (inv.used_by && inv.used_by !== id)
-      )
-        throw Error("邀请码不可用");
-      if (inv.used_by === id && !related(id, inv.owner))
-        throw Error("请使用新的邀请码");
-      if (contacts(id).length >= 100 || contacts(inv.owner).length >= 100)
-        throw Error("联系人数量已达上限");
-      db.prepare("UPDATE invites SET used_by=? WHERE hash=?").run(
-        id,
-        hash(code),
-      );
-      db.prepare("INSERT OR IGNORE INTO relations VALUES(?,?)").run(
-        ...pair(id, inv.owner),
-      );
-      db.exec("COMMIT");
-      res.json({ id: inv.owner });
-      notify();
-    } catch (e) {
-      db.exec("ROLLBACK");
-      error(res, 400, e.message);
-    }
+    const peer = String(req.body.id || "")
+      .toLowerCase()
+      .replace(/[^0-9a-f]/g, "");
+    if (!/^[0-9a-f]{64}$/.test(peer))
+      return error(res, 400, "身份码格式不正确");
+    const id = req.deviceId;
+    if (peer === id) return error(res, 400, "不能添加自己");
+    if (!db.prepare("SELECT 1 FROM devices WHERE id=?").get(peer))
+      return error(res, 400, "找不到该身份码，请确认对方已上线");
+    if (blocked(id, peer)) return error(res, 400, "暂时无法添加对方");
+    if (related(id, peer)) return res.json({ id: peer });
+    if (contacts(id).length >= 100 || contacts(peer).length >= 100)
+      return error(res, 400, "联系人数量已达上限");
+    db.prepare("INSERT OR IGNORE INTO relations VALUES(?,?)").run(
+      ...pair(id, peer),
+    );
+    res.json({ id: peer });
+    notify();
   });
   app.delete("/api/contacts/:peer", (req, res) => {
     const id = req.deviceId,
@@ -321,7 +277,6 @@ export function createApp({
     for (const map of [sessions, challenges])
       for (const [k, v] of map) if (v.expires < now) map.delete(k);
     for (const [k, v] of limits) if (v.until < now) limits.delete(k);
-    db.prepare("DELETE FROM invites WHERE expires<?").run(now);
   }, 30000);
   timer.unref();
   app.use("/api", (_, res) => error(res, 404, "接口不存在"));

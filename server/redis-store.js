@@ -59,29 +59,17 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       return !!(await evalScript(`return redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 and redis.call('SISMEMBER',KEYS[2],ARGV[1])==0 and redis.call('SISMEMBER',KEYS[3],ARGV[2])==0 and 1 or 0`,
         ["friends:" + a, "blocks:" + a, "blocks:" + b], [b, a]));
     },
-    async invite(hash, owner) {
-      await evalScript(`local g=redis.call('GET',KEYS[2]) or '0'; redis.call('HSET',KEYS[1],'owner',ARGV[1],'generation',g); redis.call('EXPIRE',KEYS[1],86400); return 1`,
-        ["invite:" + hash, "generation:" + owner], [owner]);
-    },
-    async revokeInvites(id) { await redis.incr(key("generation:" + id)); },
-    async redeem(hash, id) {
+    async connect(a, b) {
       return evalScript(`
-        local owner=redis.call('HGET',KEYS[1],'owner')
-        if not owner or owner==ARGV[1] then return {err='邀请码不可用'} end
-        local p=ARGV[2]
-        if redis.call('SISMEMBER',p..'blocks:'..owner,ARGV[1])==1 or redis.call('SISMEMBER',p..'blocks:'..ARGV[1],owner)==1 then return {err='邀请码不可用'} end
-        local used=redis.call('HGET',KEYS[1],'used_by')
-        if used and used~=ARGV[1] then return {err='邀请码不可用'} end
-        local related=redis.call('SISMEMBER',p..'friends:'..owner,ARGV[1])==1
-        if used then
-          if related then return owner else return {err='请使用新的邀请码'} end
-        end
-        if (redis.call('GET',p..'generation:'..owner) or '0')~=redis.call('HGET',KEYS[1],'generation') then return {err='邀请码不可用'} end
-        if not related and (redis.call('SCARD',p..'friends:'..owner)>=100 or redis.call('SCARD',p..'friends:'..ARGV[1])>=100) then return {err='联系人数量已达上限'} end
-        redis.call('HSET',KEYS[1],'used_by',ARGV[1])
-        redis.call('SADD',p..'friends:'..owner,ARGV[1])
-        redis.call('SADD',p..'friends:'..ARGV[1],owner)
-        return owner`, ["invite:" + hash], [id, prefix]);
+        local p=ARGV[1]
+        if ARGV[2]==ARGV[3] then return {err='不能添加自己'} end
+        if redis.call('EXISTS',p..'device:'..ARGV[3])==0 then return {err='找不到该身份码'} end
+        if redis.call('SISMEMBER',p..'blocks:'..ARGV[2],ARGV[3])==1 or redis.call('SISMEMBER',p..'blocks:'..ARGV[3],ARGV[2])==1 then return {err='暂时无法添加对方'} end
+        if redis.call('SISMEMBER',p..'friends:'..ARGV[2],ARGV[3])==1 then return ARGV[3] end
+        if redis.call('SCARD',p..'friends:'..ARGV[2])>=100 or redis.call('SCARD',p..'friends:'..ARGV[3])>=100 then return {err='联系人数量已达上限'} end
+        redis.call('SADD',p..'friends:'..ARGV[2],ARGV[3])
+        redis.call('SADD',p..'friends:'..ARGV[3],ARGV[2])
+        return ARGV[3]`, [], [prefix, a, b]);
     },
     async remove(id, peer, block) {
       const tx = redis.multi().srem(key("friends:" + id), peer).srem(key("friends:" + peer), id);

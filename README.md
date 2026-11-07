@@ -1,6 +1,6 @@
 # INOU
 
-微信式的一对一聊天 PWA 开发版。通过单次邀请码建立好友关系，聊天内容和图片只保存在双方设备。离线消息留在发送端，双方重新打开应用后再投递。
+微信式的一对一聊天 PWA 开发版。通过本地唯一身份码建立好友关系，聊天内容和图片只保存在双方设备。离线消息留在发送端，双方重新打开应用后再投递。
 
 ## 本地运行
 
@@ -20,7 +20,7 @@ npm start
 
 - iOS 主屏幕安装所需 Manifest、192/512 图标、Apple Touch Icon、Service Worker 与离线应用缓存。
 - 本地身份、口令解锁、AES-GCM 加密 IndexedDB、后台 60 秒自动锁定、多窗口互斥。
-- 130 位随机邀请码，24 小时有效、单次核销、撤销、幂等添加、双向好友关系。
+- 本地唯一身份码（设备公钥的 SHA-256）直接添加好友，幂等添加、双向好友关系。
 - WebRTC DataChannel 一对一文字与图片；签名信令绑定设备公钥和 SDP；标准 WebRTC DTLS 加密传输。
 - 消息先本地落库、接收端落库后 ACK、重连重试、消息去重、待发取消。
 - 本地备注、历史记录、草稿、聊天清空、删除好友与拉黑。
@@ -33,11 +33,11 @@ npm start
 设备 A 加密 IndexedDB ←→ WebRTC DTLS DataChannel ←→ 设备 B 加密 IndexedDB
        │                          │                         │
        └────────── 身份与信令服务 ─┴─────────────────────────┘
-                  仅身份公钥 / 邀请校验值 / 好友与封禁关系
+                  仅身份公钥 / 好友与封禁关系
                   TURN 配置后可以实时中继加密网络数据
 ```
 
-本地服务器 SQLite 只有 devices、invites、relations、blocks 四张业务表。Vercel 后端改用 Redis 共享关系元数据与有过期时间的认证/在线状态，信令通过 Pub/Sub 实时转发，不落库。服务不提供消息保存、附件上传或历史查询接口。WebSocket 只转发好友间的信令，不接受聊天消息帧。私钥、昵称、正文、图片和备份口令不上传 API。
+本地服务器 SQLite 只有 devices、relations、blocks 三张业务表。Vercel 后端改用 Redis 共享关系元数据与有过期时间的认证/在线状态，信令通过 Pub/Sub 实时转发，不落库。服务不提供消息保存、附件上传或历史查询接口。WebSocket 只转发好友间的信令，不接受聊天消息帧。私钥、昵称、正文、图片和备份口令不上传 API。
 
 不要在反向代理、错误上报、APM 或 TURN 中开启请求正文、载荷或全量会话日志。部署者仍能观察连接时间、IP 和流量大小。
 
@@ -72,7 +72,7 @@ npm run build
 npm audit
 ```
 
-服务测试涵盖认证拒绝、挑战重放、邀请码幂等与并发核销、过期撤销、拉黑、信令权限和无消息 API。浏览器回归脚本是 `scripts/browser-smoke.js`，用 Playwright CLI 的 `run-code` 运行；其中昵称与口令均为隔离测试数据，不是用户凭据。运行前启动 8787 端口，测试截图和备份输出在忽略版本控制的 `output/playwright`。
+服务测试涵盖认证拒绝、挑战重放、身份码幂等添加、拉黑、信令权限和无消息 API。浏览器回归脚本是 `scripts/browser-smoke.js`，用 Playwright CLI 的 `run-code` 运行；其中昵称与口令均为隔离测试数据，不是用户凭据。运行前启动 8787 端口，测试截图和备份输出在忽略版本控制的 `output/playwright`。
 
 依赖锁定在 package-lock.json。overrides 用于避开构建工具链已报告的 glob/minimatch/deepmerge 问题；升级依赖后应重新检查构建与审计。
 
@@ -81,7 +81,7 @@ npm audit
 - `src/main.jsx`：页面、好友操作、聊天、备份和安装引导。
 - `src/engine.js`：身份认证、签名信令、WebRTC、消息分块、回执与重试。
 - `src/vault.js`：本地密钥、AES-GCM、IndexedDB、备份格式与图片处理。
-- `server/app.js`：元数据数据库、身份验证、邀请和信令服务。
+- `server/app.js`：元数据数据库、身份验证、身份码好友关系和信令服务。
 - `docs/INOU_技术可行性与PRD.md`：产品边界和验收要求。
 
 官方参考：[WebRTC DataChannel 加密](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Using_data_channels)、[iOS 主屏幕 Web App](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/)、[WebKit 存储策略](https://webkit.org/blog/14403/updates-to-storage-policy/)。

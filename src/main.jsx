@@ -63,6 +63,12 @@ const time = (t) =>
     minute: "2-digit",
   });
 const label = (c) => c.remark || c.name || "新朋友";
+const formatId = (id) =>
+  "INOU-" + String(id || "").toUpperCase().match(/.{1,4}/g).join("-");
+const normalizeId = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^0-9a-f]/g, "");
 function Avatar({ name = "", id = "", large = false }) {
   return (
     <div
@@ -87,11 +93,11 @@ const cameraError = (e) => {
   return (
     "无法启动摄像头（" +
     (name || e?.message || "未知错误") +
-    "），请改用输入邀请码。"
+    "），请改用输入身份码。"
   );
 };
 
-function InviteQR({ value }) {
+function IdentityQR({ value }) {
   const [url, setUrl] = useState("");
   useEffect(() => {
     let ok = true;
@@ -108,7 +114,7 @@ function InviteQR({ value }) {
     };
   }, [value]);
   return url ? (
-    <img className="qr-code" src={url} alt="邀请码二维码" />
+    <img className="qr-code" src={url} alt="身份码二维码" />
   ) : (
     <div className="qr-placeholder">
       <LoaderCircle size={18} className="spin" /> 正在生成二维码…
@@ -135,7 +141,7 @@ function Scanner({ onResult, onCancel }) {
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
-          setError("当前环境不支持摄像头扫码，请改用输入邀请码。");
+          setError("当前环境不支持摄像头扫码，请改用输入身份码。");
           setStarting(false);
           return;
         }
@@ -249,7 +255,6 @@ function App() {
     [version, render] = useState(0),
     [search, setSearch] = useState(""),
     [draft, setDraft] = useState(""),
-    [invite, setInvite] = useState(null),
     [scanning, setScanning] = useState(false),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
@@ -330,7 +335,6 @@ function App() {
     setSelected(null);
     setModal(null);
     setDraft("");
-    setInvite(null);
     setSearch("");
     release.current?.();
     release.current = null;
@@ -387,9 +391,11 @@ function App() {
     setScanning(false);
     setModal(m);
   };
-  const addContact = (code) =>
+  const addContact = (value) =>
     run(async () => {
-      const d = await engine.current.api("contacts", "POST", { code });
+      const id = normalizeId(value);
+      if (!/^[0-9a-f]{64}$/.test(id)) throw Error("身份码格式不正确");
+      const d = await engine.current.api("contacts", "POST", { id });
       await engine.current.refresh();
       setView("chats");
       choose(d.id);
@@ -464,7 +470,7 @@ function App() {
               自在地聊。
             </h1>
             <p>
-              用一个邀请码，连接你信任的人。
+              用你的本地身份码，连接你信任的人。
               <br />
               聊天留在彼此的设备，陪伴回到聊天本身。
             </p>
@@ -706,10 +712,10 @@ function App() {
               </div>
               <button
                 className="settings-row"
-                onClick={() => openModal("invite")}
+                onClick={() => openModal("identity")}
               >
                 <KeyRound />
-                <span>我的邀请码</span>
+                <span>我的身份码</span>
                 <ChevronRight />
               </button>
               <button
@@ -1027,15 +1033,15 @@ function App() {
                   </button>
                   <button
                     className="secondary"
-                    onClick={() => openModal("invite")}
+                    onClick={() => openModal("identity")}
                   >
-                    <Link2 size={18} /> 分享我的邀请码
+                    <Link2 size={18} /> 分享我的身份码
                   </button>
                 </div>
                 <div className="welcome-features">
                   <span>
                     <KeyRound />
-                    邀请码连接
+                    身份码连接
                   </span>
                   <span>
                     <ShieldCheck />
@@ -1137,7 +1143,7 @@ function App() {
                   />
                 ) : (
                   <>
-                    <p>扫描对方二维码，或输入邀请码，即可成为好友。</p>
+                    <p>扫描对方二维码，或输入身份码，即可成为好友。</p>
                     <button
                       className="primary full"
                       onClick={() => setScanning(true)}
@@ -1148,15 +1154,15 @@ function App() {
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        addContact(new FormData(e.target).get("code"));
+                        addContact(new FormData(e.target).get("id"));
                       }}
                     >
                       <label>
-                        好友邀请码
+                        对方身份码
                         <input
-                          name="code"
+                          name="id"
                           className="code-input"
-                          placeholder="INOU-XXXXX-XXXXX-…"
+                          placeholder="INOU-XXXX-XXXX-XXXX-…"
                           required
                           autoCapitalize="characters"
                           autoComplete="off"
@@ -1169,64 +1175,37 @@ function App() {
                   </>
                 )}
                 <div className="modal-tip">
-                  <ShieldCheck size={16} /> 只与持有邀请码的人建立联系。
+                  <ShieldCheck size={16} /> 输入或扫描对方的身份码，即可建立联系。
                 </div>
               </>
             )}
-            {modal === "invite" && (
+            {modal === "identity" && (
               <>
                 <div className="modal-icon">
-                  <KeyRound />
+                  <QrCode />
                 </div>
-                <h2>我的邀请码</h2>
-                <p>让对方扫描二维码，或复制邀请码发送给对方。</p>
-                {invite ? (
-                  <>
-                    <InviteQR value={invite.code} />
-                    <div className="invite-code">{invite.code}</div>
-                    <small className="center muted">
-                      单次使用 ·{" "}
-                      {new Date(invite.expires).toLocaleString("zh-CN")} 前有效
-                    </small>
-                    <button
-                      className="primary full"
-                      onClick={() =>
-                        run(async () => {
-                          await navigator.clipboard.writeText(invite.code);
-                          flash("邀请码已复制");
-                        })
-                      }
-                    >
-                      <Copy size={17} /> 复制邀请码
-                    </button>
-                    <button
-                      className="text-btn full"
-                      onClick={() =>
-                        run(async () => {
-                          await engine.current.api("invites", "DELETE");
-                          setInvite(null);
-                          flash("未使用的邀请码已失效");
-                        })
-                      }
-                    >
-                      撤销未使用的邀请码
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="primary full"
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () =>
-                        setInvite(await engine.current.api("invites", "POST")),
-                      )
-                    }
-                  >
-                    <Plus size={18} /> 生成邀请码
-                  </button>
-                )}
+                <h2>我的身份码</h2>
+                <p>让对方扫描二维码，或复制身份码发送给对方。</p>
+                <IdentityQR value={formatId(state.identity.id)} />
+                <div className="id-code">{formatId(state.identity.id)}</div>
+                <small className="center muted">
+                  长期有效 · 与你的本地身份一一对应
+                </small>
+                <button
+                  className="primary full"
+                  onClick={() =>
+                    run(async () => {
+                      await navigator.clipboard.writeText(
+                        formatId(state.identity.id),
+                      );
+                      flash("身份码已复制");
+                    })
+                  }
+                >
+                  <Copy size={17} /> 复制身份码
+                </button>
                 <div className="modal-tip">
-                  持有此码的人可以直接添加你，无需再次确认。请勿公开发布。
+                  <ShieldCheck size={16} /> 持有你身份码的人可以直接添加你。请只分享给信任的人。
                 </div>
               </>
             )}
@@ -1441,7 +1420,7 @@ function App() {
                 <p>
                   {modal === "clear"
                     ? "本机记录将被删除，待发消息一并取消。对方的记录不受影响，备份中的副本仍保留。"
-                    : "将停止发送待发消息，本机历史记录仍保留。再次联系需要新的邀请码。"}
+                    : "将停止发送待发消息，本机历史记录仍保留。再次联系需要对方的身份码。"}
                 </p>
                 <button
                   className="danger-btn full"
@@ -1491,7 +1470,7 @@ function App() {
             {modal === "blocked" && (
               <>
                 <h2>黑名单</h2>
-                <p>解除拉黑后，需要用新邀请码重新建立关系。</p>
+                <p>解除拉黑后，需要用对方的身份码重新建立关系。</p>
                 {state.contacts
                   .filter((c) => c.blocked)
                   .map((c) => (
@@ -1539,7 +1518,7 @@ function App() {
                 <ol className="install-steps">
                   <li>从桌面图标打开 INOU</li>
                   <li>在该实例中创建本地身份</li>
-                  <li>保存邀请码，邀请朋友加入</li>
+                  <li>分享我的身份码，邀请朋友加入</li>
                 </ol>
                 <div className="backup-note">
                   当前为本地开发版。手机安装需要 HTTPS 部署；普通局域网 HTTP
