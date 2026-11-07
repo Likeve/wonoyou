@@ -30,10 +30,10 @@ async () => {
     .first()
     .click();
   await a.getByLabel("对方身份码").fill(code);
-  await a
-    .getByRole("dialog")
-    .getByRole("button", { name: "添加好友", exact: true })
-    .click();
+  await a.getByRole("dialog").getByRole("button", { name: "查找对方", exact: true }).click();
+  await a.locator(".preview-card").waitFor();
+  await a.locator(".preview-name").filter({ hasText: "阿青" }).waitFor();
+  await a.getByRole("button", { name: "确定添加", exact: true }).click();
   await a.getByLabel("消息", { exact: true }).waitFor();
   await b.getByRole("button", { name: "聊天", exact: true }).click();
   await b.locator(".contact-row").first().click();

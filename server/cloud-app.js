@@ -53,7 +53,7 @@ export function createCloudApp({
     res.json({ nonce, id });
   });
   app.post("/api/session", async (req, res) => {
-    const { nonce, signature } = req.body || {};
+    const { nonce, signature, name } = req.body || {};
     if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nonce) || typeof signature !== "string" || signature.length > 200)
       return fail(res, 400, "设备验证失败");
     const device = await store.consumeChallenge(nonce);
@@ -62,7 +62,8 @@ export function createCloudApp({
     try { verified = await webcrypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, await importKey(device.publicKey), Buffer.from(signature, "base64"), Buffer.from("INOU-AUTH:" + nonce)); } catch { /* Invalid proof. */ }
     if (!verified) return fail(res, 401, "设备验证失败");
     const token = randomBytes(32).toString("base64url");
-    await store.createSession(token, device);
+    const displayName = typeof name === "string" ? name.trim().slice(0, 32) : "";
+    await store.createSession(token, device, displayName);
     res.json({ token, id: device.id });
   });
   app.use("/api", async (req, res, next) => {
@@ -99,6 +100,14 @@ export function createCloudApp({
   app.get("/api/contacts", async (req, res) => res.json({
     contacts: await store.contacts(req.deviceId), blocked: await store.blocked(req.deviceId),
   }));
+  app.get("/api/identity/:id", async (req, res) => {
+    if (await store.limited("lookup:" + req.deviceId, 60)) return fail(res, 429, "尝试过多，请稍后再试");
+    const id = String(req.params.id || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (!/^[0-9a-f]{64}$/.test(id)) return fail(res, 400, "身份码格式不正确");
+    const info = await store.device(id);
+    if (!info) return fail(res, 400, "找不到该身份码，请确认对方已上线");
+    res.json({ id, name: info.name || "" });
+  });
   app.post("/api/contacts", async (req, res) => {
     if (await store.limited("add:" + req.deviceId, 10)) return fail(res, 429, "尝试过多，请稍后再试");
     const peer = String(req.body?.id || "").toLowerCase().replace(/[^0-9a-f]/g, "");

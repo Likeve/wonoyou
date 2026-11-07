@@ -22,13 +22,13 @@ test("cloud: shared authentication, identity-code contacts, cross-instance signa
       body: body ? JSON.stringify(body) : undefined });
     return { status: response.status, ...await response.json() };
   }
-  async function identity(a, b) {
+  async function identity(a, b, name) {
     const keys = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
     const publicKey = Buffer.from(await webcrypto.subtle.exportKey("spki", keys.publicKey)).toString("base64");
     const challenge = await request(a, "challenge", { method: "POST", body: { publicKey } });
     assert.equal(challenge.status, 200);
     const signature = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keys.privateKey, Buffer.from("INOU-AUTH:" + challenge.nonce))).toString("base64");
-    const session = await request(b, "session", { method: "POST", body: { nonce: challenge.nonce, signature } });
+    const session = await request(b, "session", { method: "POST", body: { nonce: challenge.nonce, signature, name } });
     assert.equal(session.status, 200);
     assert.equal((await request(a, "session", { method: "POST", body: { nonce: challenge.nonce, signature } })).status, 401);
     return session;
@@ -51,12 +51,13 @@ test("cloud: shared authentication, identity-code contacts, cross-instance signa
   try {
     const a = await start(), b = await start();
     assert.equal((await request(a, "contacts")).status, 401);
-    const alice = await identity(a, b), bob = await identity(b, a), eve = await identity(a, b);
+    const alice = await identity(a, b, "小林"), bob = await identity(b, a, "阿青"), eve = await identity(a, b, "路人");
     const friend = bob, stranger = eve;
     assert.equal((await request(b, "contacts", { method: "POST", token: friend.token, body: { id: alice.id } })).status, 200);
     assert.equal((await request(b, "contacts", { method: "POST", token: friend.token, body: { id: alice.id } })).status, 200);
     const contacts = await request(b, "contacts", { token: alice.token });
     assert.deepEqual(contacts.contacts.map(c => c.id), [friend.id]);
+    assert.equal((await request(b, "identity/" + alice.id, { token: friend.token })).name, "小林");
     const wsA = await connect(a, alice.token), wsB = await connect(b, friend.token);
     const received = waitMessage(wsB, m => m.type === "signal");
     const marker = "transient-signal-" + randomUUID();

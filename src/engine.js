@@ -66,6 +66,7 @@ export class ChatEngine {
       const session = await this.api("session", "POST", {
         nonce: c.nonce,
         signature: await sign(this.key, "INOU-AUTH:" + c.nonce),
+        name: this.state.identity.name,
       });
       if (!this.running) return;
       this.token = session.token;

@@ -256,6 +256,7 @@ function App() {
     [search, setSearch] = useState(""),
     [draft, setDraft] = useState(""),
     [scanning, setScanning] = useState(false),
+    [preview, setPreview] = useState(null),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
     [emoji, setEmoji] = useState(false);
@@ -335,6 +336,7 @@ function App() {
     setSelected(null);
     setModal(null);
     setDraft("");
+    setPreview(null);
     setSearch("");
     release.current?.();
     release.current = null;
@@ -389,17 +391,27 @@ function App() {
   const openModal = (m) => {
     setError("");
     setScanning(false);
+    setPreview(null);
     setModal(m);
   };
-  const addContact = (value) =>
+  const lookupContact = (value) =>
     run(async () => {
       const id = normalizeId(value);
       if (!/^[0-9a-f]{64}$/.test(id)) throw Error("身份码格式不正确");
-      const d = await engine.current.api("contacts", "POST", { id });
+      const d = await engine.current.api("identity/" + id);
+      setScanning(false);
+      setPreview(d);
+    });
+  const confirmAdd = () =>
+    run(async () => {
+      const d = await engine.current.api("contacts", "POST", {
+        id: preview.id,
+      });
       await engine.current.refresh();
       setView("chats");
       choose(d.id);
       setModal(null);
+      setPreview(null);
       flash("已添加好友");
     });
   const persist = async () => {
@@ -1133,17 +1145,52 @@ function App() {
             {modal === "add" && (
               <>
                 <div className="modal-icon">
-                  {scanning ? <QrCode /> : <UserPlus />}
+                  {preview ? (
+                    <ContactRound />
+                  ) : scanning ? (
+                    <QrCode />
+                  ) : (
+                    <UserPlus />
+                  )}
                 </div>
-                <h2>添加一位新朋友</h2>
-                {scanning ? (
-                  <Scanner
-                    onResult={addContact}
-                    onCancel={() => setScanning(false)}
-                  />
+                {preview ? (
+                  <>
+                    <h2>确认添加</h2>
+                    <p>确认下面的名字和身份码无误后，再添加对方。</p>
+                    <div className="preview-card">
+                      <Avatar large name={preview.name || "新朋友"} id={preview.id} />
+                      <div className="preview-name">{preview.name || "未命名"}</div>
+                      <div className="preview-code">{formatId(preview.id)}</div>
+                    </div>
+                    <button
+                      className="primary full"
+                      disabled={busy}
+                      onClick={confirmAdd}
+                    >
+                      确定添加 <ArrowUpRight size={17} />
+                    </button>
+                    <button
+                      className="text-btn full"
+                      onClick={() => setPreview(null)}
+                    >
+                      返回
+                    </button>
+                    <div className="modal-tip">
+                      <ShieldCheck size={16} /> 确认是本人后再添加；名字由对方自行设置。
+                    </div>
+                  </>
+                ) : scanning ? (
+                  <>
+                    <h2>扫描二维码</h2>
+                    <Scanner
+                      onResult={lookupContact}
+                      onCancel={() => setScanning(false)}
+                    />
+                  </>
                 ) : (
                   <>
-                    <p>扫描对方二维码，或输入身份码，即可成为好友。</p>
+                    <h2>添加一位新朋友</h2>
+                    <p>扫描对方二维码，或输入身份码，先查看对方信息。</p>
                     <button
                       className="primary full"
                       onClick={() => setScanning(true)}
@@ -1154,7 +1201,7 @@ function App() {
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        addContact(new FormData(e.target).get("id"));
+                        lookupContact(new FormData(e.target).get("id"));
                       }}
                     >
                       <label>
@@ -1169,14 +1216,11 @@ function App() {
                         />
                       </label>
                       <button className="primary full" disabled={busy}>
-                        添加好友 <ArrowUpRight size={17} />
+                        查找对方 <ArrowUpRight size={17} />
                       </button>
                     </form>
                   </>
                 )}
-                <div className="modal-tip">
-                  <ShieldCheck size={16} /> 输入或扫描对方的身份码，即可建立联系。
-                </div>
               </>
             )}
             {modal === "identity" && (

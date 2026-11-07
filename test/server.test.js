@@ -21,7 +21,7 @@ async function request(path, { token, method = "GET", body } = {}) {
   });
   return { status: r.status, ...(await r.json()) };
 }
-async function identity() {
+async function identity(name) {
   const keys = await webcrypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
@@ -40,7 +40,7 @@ async function identity() {
   ).toString("base64");
   return request("session", {
     method: "POST",
-    body: { nonce: c.nonce, signature },
+    body: { nonce: c.nonce, signature, name },
   });
 }
 test("authentication required and unknown content APIs are absent", async () => {
@@ -111,6 +111,19 @@ test("identity code adds both sides, is idempotent, and is reusable", async () =
   );
   // The identity code is public and long-lived: anyone else may add the same person.
   assert.equal((await add(c, b)).status, 200);
+});
+test("identity lookup previews the peer name and rejects unknown codes", async () => {
+  const a = await identity("小林"),
+    b = await identity("阿青");
+  assert.equal((await request("identity/" + b.id, { token: a.token })).name, "阿青");
+  assert.equal(
+    (await request("identity/" + "f".repeat(64), { token: a.token })).status,
+    400,
+  );
+  assert.equal(
+    (await request("identity/" + "not-a-code", { token: a.token })).status,
+    400,
+  );
 });
 test("self-add, malformed and unknown identity codes are rejected", async () => {
   const a = await identity();

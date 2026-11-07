@@ -17,7 +17,7 @@
 - 数据服务：Upstash Redis，`upstash-kv-coral-feather`，当前为 Free 方案。
 - 静态前端：Vite + React + PWA；`api/backend.js` 导出 Node HTTP Server，承接 `/api/*` 和 `/signal`。
 - 本地默认服务仍使用 SQLite；Vercel 服务使用 Redis，不读写本机 `.data`。
-- Redis 保存设备公钥、好友/封禁关系，以及有过期时间的认证、限流和在线状态。聊天正文、图片、昵称、身份私钥和备份口令不进入这些数据结构。
+- Redis 保存设备公钥、昵称、好友/封禁关系，以及有过期时间的认证、限流和在线状态。昵称仅用于加好友前的身份确认；聊天正文、图片、身份私钥和备份口令不进入这些数据结构。
 - 信令通过 Redis Pub/Sub 实时转发；不使用消息队列、Streams 或历史消息存储。离线消息仍保留在发送设备，双方重新在线后传送。
 
 ## 环境变量

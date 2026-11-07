@@ -16,9 +16,15 @@ export function createApp({
   if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
- CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, public_key TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, public_key TEXT NOT NULL, name TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS relations(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));
  CREATE TABLE IF NOT EXISTS blocks(owner TEXT NOT NULL,peer TEXT NOT NULL,PRIMARY KEY(owner,peer));`);
+  if (
+    !db
+      .prepare("SELECT name FROM pragma_table_info('devices') WHERE name='name'")
+      .get()
+  )
+    db.exec("ALTER TABLE devices ADD COLUMN name TEXT NOT NULL DEFAULT ''");
   const app = express(),
     server = createServer(app),
     sockets = new Map(),
@@ -79,7 +85,7 @@ export function createApp({
   });
   app.post("/api/session", async (req, res) => {
     try {
-      const { nonce, signature } = req.body,
+      const { nonce, signature, name } = req.body,
         c = challenges.get(nonce);
       challenges.delete(nonce);
       if (!c || c.expires < Date.now()) return error(res, 401, "验证已过期");
@@ -99,9 +105,11 @@ export function createApp({
         ))
       )
         return error(res, 401, "设备验证失败");
-      db.prepare("INSERT OR IGNORE INTO devices VALUES(?,?)").run(
+      const displayName = typeof name === "string" ? name.trim().slice(0, 32) : "";
+      db.prepare("INSERT OR IGNORE INTO devices(id, public_key, name) VALUES(?,?,?)").run(
         c.id,
         c.publicKey,
+        displayName,
       );
       const token = randomBytes(32).toString("base64url");
       sessions.set(token, { id: c.id, expires: Date.now() + 12 * 3600000 });
@@ -158,6 +166,18 @@ export function createApp({
         .map((v) => v.peer),
     }),
   );
+  app.get("/api/identity/:id", (req, res) => {
+    if (limited("lookup:" + req.deviceId, 60))
+      return error(res, 429, "尝试过多，请稍后再试");
+    const id = String(req.params.id || "")
+      .toLowerCase()
+      .replace(/[^0-9a-f]/g, "");
+    if (!/^[0-9a-f]{64}$/.test(id))
+      return error(res, 400, "身份码格式不正确");
+    const d = db.prepare("SELECT id, name FROM devices WHERE id=?").get(id);
+    if (!d) return error(res, 400, "找不到该身份码，请确认对方已上线");
+    res.json({ id: d.id, name: d.name || "" });
+  });
   app.post("/api/contacts", (req, res) => {
     if (limited("add:" + req.deviceId, 10))
       return error(res, 429, "尝试过多，请稍后再试");

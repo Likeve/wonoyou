@@ -2,6 +2,16 @@ import Redis from "ioredis";
 import { createHash } from "node:crypto";
 
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
+const parseDevice = (raw) => {
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    return { publicKey: d.publicKey || "", name: d.name || "" };
+  } catch {
+    // Legacy plain public-key value.
+    return { publicKey: raw, name: "" };
+  }
+};
 
 // All keys share a hash tag, allowing atomic Lua operations on Redis clusters.
 // Only metadata lives here. Signaling uses Pub/Sub, never lists or streams.
@@ -42,8 +52,9 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       const raw = await evalScript(`local v=redis.call('GET',KEYS[1]); redis.call('DEL',KEYS[1]); return v`, ["challenge:" + nonce]);
       return raw ? JSON.parse(raw) : null;
     },
-    async createSession(token, device) {
-      await redis.multi().set(key("device:" + device.id), device.publicKey, "NX")
+    async createSession(token, device, name = "") {
+      const payload = JSON.stringify({ publicKey: device.publicKey, name });
+      await redis.multi().set(key("device:" + device.id), payload, "NX")
         .set(key("session:" + digest(token)), device.id, "EX", 43200).exec().then(checkTransaction);
     },
     async session(token) { return typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token)
@@ -52,7 +63,14 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       const peers = await redis.smembers(key("friends:" + id));
       if (!peers.length) return [];
       const values = await redis.mget(...peers.flatMap(p => [key("device:" + p), key("presence:" + p)]));
-      return peers.map((p, i) => ({ id: p, publicKey: values[i * 2], online: !!values[i * 2 + 1] }));
+      return peers.map((p, i) => {
+        const d = parseDevice(values[i * 2]);
+        return { id: p, publicKey: d?.publicKey, online: !!values[i * 2 + 1] };
+      });
+    },
+    async device(id) {
+      const raw = await redis.get(key("device:" + id));
+      return raw ? parseDevice(raw) : null;
     },
     async blocked(id) { return redis.smembers(key("blocks:" + id)); },
     async related(a, b) {
