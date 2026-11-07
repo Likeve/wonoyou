@@ -31,7 +31,13 @@ import {
   RefreshCw,
   ShieldBan,
   LoaderCircle,
+  QrCode,
+  ScanLine,
+  Camera,
+  CameraOff,
 } from "lucide-react";
+import QRCode from "qrcode";
+import jsQR from "jsqr";
 import { registerSW } from "virtual:pwa-register";
 import {
   hasVault,
@@ -69,6 +75,149 @@ function Avatar({ name = "", id = "", large = false }) {
     </div>
   );
 }
+
+const cameraError = (e) => {
+  const name = e?.name || "";
+  if (name === "NotAllowedError" || name === "SecurityError")
+    return "没有摄像头权限，请在系统设置中允许访问。";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "没有找到可用的摄像头。";
+  if (name === "NotReadableError")
+    return "摄像头正被其他应用占用，请稍后再试。";
+  return "无法启动摄像头，请改用输入邀请码。";
+};
+
+function InviteQR({ value }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let ok = true;
+    QRCode.toDataURL(value, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 260,
+      color: { dark: "#1f4d36", light: "#ffffff" },
+    })
+      .then((u) => ok && setUrl(u))
+      .catch(() => {});
+    return () => {
+      ok = false;
+    };
+  }, [value]);
+  return url ? (
+    <img className="qr-code" src={url} alt="邀请码二维码" />
+  ) : (
+    <div className="qr-placeholder">
+      <LoaderCircle size={18} className="spin" /> 正在生成二维码…
+    </div>
+  );
+}
+
+function Scanner({ onResult, onCancel }) {
+  const videoRef = useRef(null),
+    canvasRef = useRef(null),
+    streamRef = useRef(null),
+    rafRef = useRef(0),
+    doneRef = useRef(false),
+    onResultRef = useRef(onResult);
+  onResultRef.current = onResult;
+  const [error, setError] = useState("");
+  const [starting, setStarting] = useState(true);
+  useEffect(() => {
+    let stopped = false;
+    (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setError("当前环境不支持摄像头扫码，请改用输入邀请码。");
+          setStarting(false);
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        if (stopped) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        const video = videoRef.current;
+        video.srcObject = stream;
+        video.setAttribute("playsinline", "true");
+        await video.play();
+        setStarting(false);
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        const tick = () => {
+          if (stopped || doneRef.current) return;
+          if (video.readyState >= video.HAVE_ENOUGH_DATA) {
+            const w = video.videoWidth,
+              h = video.videoHeight;
+            if (w && h) {
+              canvas.width = w;
+              canvas.height = h;
+              ctx.drawImage(video, 0, 0, w, h);
+              const img = ctx.getImageData(0, 0, w, h);
+              const code = jsQR(img.data, w, h, {
+                inversionAttempts: "dontInvert",
+              });
+              if (code?.data) {
+                doneRef.current = true;
+                streamRef.current?.getTracks().forEach((t) => t.stop());
+                onResultRef.current(code.data);
+                return;
+              }
+            }
+          }
+          rafRef.current = requestAnimationFrame(tick);
+        };
+        rafRef.current = requestAnimationFrame(tick);
+      } catch (e) {
+        if (!stopped) {
+          setError(cameraError(e));
+          setStarting(false);
+        }
+      }
+    })();
+    return () => {
+      stopped = true;
+      doneRef.current = true;
+      cancelAnimationFrame(rafRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, []);
+  return (
+    <div className="scanner">
+      <div className="scanner-view">
+        <video ref={videoRef} muted playsInline />
+        {starting && (
+          <div className="scanner-status">
+            <LoaderCircle size={20} className="spin" /> 正在打开摄像头…
+          </div>
+        )}
+        {!starting && !error && <i className="scanner-frame" />}
+      </div>
+      {error ? (
+        <div className="scan-error">
+          <CameraOff size={17} /> {error}
+        </div>
+      ) : (
+        <p className="muted center scan-hint">
+          将对方二维码放入框内，识别后自动添加。
+        </p>
+      )}
+      <button
+        className="text-btn full"
+        onClick={() => {
+          onCancel();
+        }}
+      >
+        返回手动输入
+      </button>
+    </div>
+  );
+}
+
 function App() {
   const [exists, setExists] = useState(null),
     [vault, setVault] = useState(null),
@@ -82,6 +231,7 @@ function App() {
     [search, setSearch] = useState(""),
     [draft, setDraft] = useState(""),
     [invite, setInvite] = useState(null),
+    [scanning, setScanning] = useState(false),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
     [emoji, setEmoji] = useState(false);
@@ -215,8 +365,18 @@ function App() {
   };
   const openModal = (m) => {
     setError("");
+    setScanning(false);
     setModal(m);
   };
+  const addContact = (code) =>
+    run(async () => {
+      const d = await engine.current.api("contacts", "POST", { code });
+      await engine.current.refresh();
+      setView("chats");
+      choose(d.id);
+      setModal(null);
+      flash("已添加好友");
+    });
   const persist = async () => {
     await vault.save();
     render((n) => n + 1);
@@ -948,41 +1108,47 @@ function App() {
             {modal === "add" && (
               <>
                 <div className="modal-icon">
-                  <UserPlus />
+                  {scanning ? <QrCode /> : <UserPlus />}
                 </div>
                 <h2>添加一位新朋友</h2>
-                <p>输入对方分享的邀请码，即可成为好友。</p>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const code = new FormData(e.target).get("code");
-                    run(async () => {
-                      const d = await engine.current.api("contacts", "POST", {
-                        code,
-                      });
-                      await engine.current.refresh();
-                      setView("chats");
-                      choose(d.id);
-                      setModal(null);
-                      flash("已添加好友");
-                    });
-                  }}
-                >
-                  <label>
-                    好友邀请码
-                    <input
-                      name="code"
-                      className="code-input"
-                      placeholder="INOU-XXXXX-XXXXX-…"
-                      required
-                      autoCapitalize="characters"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button className="primary full" disabled={busy}>
-                    添加好友 <ArrowUpRight size={17} />
-                  </button>
-                </form>
+                {scanning ? (
+                  <Scanner
+                    onResult={addContact}
+                    onCancel={() => setScanning(false)}
+                  />
+                ) : (
+                  <>
+                    <p>扫描对方二维码，或输入邀请码，即可成为好友。</p>
+                    <button
+                      className="primary full"
+                      onClick={() => setScanning(true)}
+                    >
+                      <ScanLine size={17} /> 扫描二维码
+                    </button>
+                    <div className="or-divider">或</div>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        addContact(new FormData(e.target).get("code"));
+                      }}
+                    >
+                      <label>
+                        好友邀请码
+                        <input
+                          name="code"
+                          className="code-input"
+                          placeholder="INOU-XXXXX-XXXXX-…"
+                          required
+                          autoCapitalize="characters"
+                          autoComplete="off"
+                        />
+                      </label>
+                      <button className="primary full" disabled={busy}>
+                        添加好友 <ArrowUpRight size={17} />
+                      </button>
+                    </form>
+                  </>
+                )}
                 <div className="modal-tip">
                   <ShieldCheck size={16} /> 只与持有邀请码的人建立联系。
                 </div>
@@ -994,9 +1160,10 @@ function App() {
                   <KeyRound />
                 </div>
                 <h2>我的邀请码</h2>
-                <p>分享给想联系的人。对方输入后即可添加你。</p>
+                <p>让对方扫描二维码，或复制邀请码发送给对方。</p>
                 {invite ? (
                   <>
+                    <InviteQR value={invite.code} />
                     <div className="invite-code">{invite.code}</div>
                     <small className="center muted">
                       单次使用 ·{" "}
