@@ -13,8 +13,6 @@ async () => {
   const create = async (p, name) => {
     await p.goto("http://localhost:8787");
     await p.getByLabel("你的昵称").fill(name);
-    await p.getByLabel("设置解锁口令").fill("INOU-test-only-2026");
-    await p.getByLabel("确认口令", { exact: true }).fill("INOU-test-only-2026");
     await p.getByRole("button", { name: "创建本地身份" }).click();
     await p.getByText("已连接 · 记录仅存本机").waitFor({ timeout: 15000 });
   };
@@ -71,8 +69,7 @@ async () => {
   await a.getByText("等待双方上线", { exact: true }).last().waitFor();
   const b2 = await bContext.newPage();
   await b2.goto("http://localhost:8787");
-  await b2.getByLabel("解锁口令", { exact: true }).fill("INOU-test-only-2026");
-  await b2.getByRole("button", { name: "解锁聊天" }).click();
+  await b2.getByText("已连接 · 记录仅存本机").waitFor({ timeout: 15000 });
   await b2.locator(".contact-row").first().click();
   await b2
     .locator(".bubble")
@@ -145,11 +142,7 @@ async () => {
   )
     throw Error("plaintext in storage");
   await a.reload();
-  await a.getByLabel("解锁口令", { exact: true }).fill("wrong-password");
-  await a.getByRole("button", { name: "解锁聊天" }).click();
-  await a.getByRole("alert").filter({ hasText: "口令不正确" }).waitFor();
-  await a.getByLabel("解锁口令", { exact: true }).fill("INOU-test-only-2026");
-  await a.getByRole("button", { name: "解锁聊天" }).click();
+  await a.getByText("已连接 · 记录仅存本机").waitFor({ timeout: 15000 });
   await a.locator(".contact-row").first().click();
   await a.locator(".bubble").filter({ hasText: "你好，阿青！" }).waitFor();
   const result = {
@@ -161,7 +154,6 @@ async () => {
       "offline queue + reconnect",
       "no duplicate delivery",
       "encrypted IndexedDB",
-      "wrong password rejected",
       "history survives reload",
       "image transfer",
       "encrypted backup export",
@@ -174,8 +166,7 @@ async () => {
   await a.reload();
   await aContext.setOffline(true);
   await a.reload();
-  await a.getByLabel("解锁口令", { exact: true }).fill("INOU-test-only-2026");
-  await a.getByRole("button", { name: "解锁聊天" }).click();
+  await a.locator(".contact-row").first().waitFor({ timeout: 15000 });
   await a.locator(".contact-row").first().click();
   await a.locator(".bubble").filter({ hasText: "你好，阿青！" }).waitFor();
   result.passed.push("offline app shell + local history");

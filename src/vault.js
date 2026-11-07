@@ -81,8 +81,23 @@ async function record(value) {
   }
 }
 export const hasVault = async () => !!(await record());
-export async function createVault(name, password) {
-  if (await hasVault()) throw Error("这台设备已有资料，请先解锁");
+export async function deleteVault() {
+  const db = await dbPromise();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("secure", "readwrite"),
+        store = tx.objectStore("secure");
+      store.delete("vault");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || Error("清除失败"));
+    });
+  } finally {
+    db.close();
+  }
+}
+export async function createVault(name) {
+  if (await hasVault()) throw Error("这台设备已有资料");
   const pair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
@@ -96,18 +111,13 @@ export async function createVault(name, password) {
     name,
   };
   const key = await crypto.subtle.generateKey(
-      { name: "AES-GCM", length: 256 },
-      true,
-      ["encrypt", "decrypt"],
-    ),
-    salt = random(16);
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
   const header = {
-    version: 1,
-    salt: to64(salt),
-    wrapped: await seal(
-      await passwordKey(password, salt),
-      to64(await crypto.subtle.exportKey("raw", key)),
-    ),
+    version: 2,
+    key: to64(await crypto.subtle.exportKey("raw", key)),
   };
   const state = {
     identity,
@@ -122,28 +132,26 @@ export async function createVault(name, password) {
   await vault.save();
   return vault;
 }
-export async function unlockVault(password) {
+export async function loadVault() {
   const r = await record();
   if (!r) throw Error("没有本地资料");
+  if (r.version !== 2 || typeof r.key !== "string")
+    throw Error("本地资料版本过旧，请重新创建身份");
   try {
-    const raw = await unseal(
-        await passwordKey(password, from64(r.salt)),
-        r.wrapped,
-      ),
-      key = await crypto.subtle.importKey(
-        "raw",
-        from64(raw),
-        "AES-GCM",
-        false,
-        ["encrypt", "decrypt"],
-      );
+    const key = await crypto.subtle.importKey(
+      "raw",
+      from64(r.key),
+      "AES-GCM",
+      false,
+      ["encrypt", "decrypt"],
+    );
     return makeVault(
       key,
-      { version: r.version, salt: r.salt, wrapped: r.wrapped },
+      { version: r.version, key: r.key },
       await unseal(key, r.box),
     );
   } catch {
-    throw Error("口令不正确，或本地资料已损坏");
+    throw Error("本地资料已损坏，请重新创建身份");
   }
 }
 function makeVault(key, header, state) {

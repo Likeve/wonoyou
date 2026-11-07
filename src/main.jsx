@@ -42,7 +42,8 @@ import { registerSW } from "virtual:pwa-register";
 import {
   hasVault,
   createVault,
-  unlockVault,
+  loadVault,
+  deleteVault,
   exportArchive,
   readArchive,
   prepareImage,
@@ -244,7 +245,8 @@ function Scanner({ onResult, onCancel }) {
 }
 
 function App() {
-  const [exists, setExists] = useState(null),
+  const [ready, setReady] = useState("loading"),
+    [bootNeedsReset, setBootNeedsReset] = useState(false),
     [vault, setVault] = useState(null),
     [view, setView] = useState("chats"),
     [selected, setSelected] = useState(null),
@@ -291,10 +293,25 @@ function App() {
       setBusy(false);
     }
   };
+  async function boot() {
+    setError("");
+    setBootNeedsReset(false);
+    try {
+      if (await hasVault()) {
+        try {
+          await start(await loadVault());
+        } catch (e) {
+          if (/版本过旧|已损坏/.test(e.message)) setBootNeedsReset(true);
+          throw e;
+        }
+      } else setReady("create");
+    } catch (e) {
+      setError(e.message || "无法使用本地存储");
+      setReady("error");
+    }
+  }
   useEffect(() => {
-    hasVault()
-      .then(setExists)
-      .catch(() => setError("无法使用本地存储，请退出无痕模式后重试"));
+    boot();
     const updater = registerSW({
       onNeedRefresh() {
         setUpdate(() => updater);
@@ -317,7 +334,6 @@ function App() {
         throw Error("INOU 已在另一个窗口打开，请先关闭那个窗口");
     }
     setVault(v);
-    setExists(true);
     const e = new ChatEngine(
       v,
       () => render((n) => n + 1),
@@ -327,40 +343,13 @@ function App() {
     e.start().catch((e) => setError(e.message));
     navigator.storage?.persist?.().catch(() => {});
   };
-  const lock = async () => {
-    const v = vault;
-    engine.current?.stop();
-    await v?.flush().catch(() => {});
-    engine.current = null;
-    setVault(null);
-    setSelected(null);
-    setModal(null);
-    setDraft("");
-    setPreview(null);
-    setSearch("");
-    release.current?.();
-    release.current = null;
-  };
   useEffect(() => {
     if (!vault) return;
-    let timer,
-      hiddenAt = 0;
     const visibility = () => {
-      if (document.hidden) {
-        hiddenAt = Date.now();
-        timer = setTimeout(() => lock(), 60000);
-      } else {
-        clearTimeout(timer);
-        if (hiddenAt && Date.now() - hiddenAt >= 60000) lock();
-        else engine.current?.tick();
-        hiddenAt = 0;
-      }
+      if (!document.hidden) engine.current?.tick();
     };
     document.addEventListener("visibilitychange", visibility);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", visibility);
-    };
+    return () => document.removeEventListener("visibilitychange", visibility);
   }, [vault]);
   useEffect(() => {
     if (vault && selected && !document.hidden && nearBottom.current) {
@@ -454,15 +443,7 @@ function App() {
     e.preventDefault();
     const data = new FormData(e.target);
     run(async () => {
-      const pass = data.get("password");
-      if (!exists && pass.length < 8) throw Error("请设置至少 8 位的解锁口令");
-      if (!exists && pass !== data.get("confirm"))
-        throw Error("两次口令不一致");
-      await start(
-        exists
-          ? await unlockVault(pass)
-          : await createVault(data.get("name").trim() || "我", pass),
-      );
+      await start(await createVault(data.get("name").trim() || "我"));
     });
   };
   if (!vault)
@@ -493,9 +474,7 @@ function App() {
               <div className="art-bubble green">
                 <ShieldCheck size={25} /> 记录，由自己保管。
               </div>
-              <div className="art-foot">
-                <LockKeyhole size={15} /> 本机加密保存 · 无云端聊天记录
-              </div>
+              <div className="art-foot">记录只保存在本机 · 无云端聊天记录</div>
             </div>
           </div>
           <small>简单连接，安心相处。</small>
@@ -507,29 +486,54 @@ function App() {
               <b>INOU</b>
             </div>
             <div className="auth-icon">
-              {exists ? <LockKeyhole size={28} /> : <MessageCircle size={28} />}
+              <MessageCircle size={28} />
             </div>
-            <h2>{exists ? "欢迎回来" : "从一段对话开始"}</h2>
-            <p className="muted">
-              {exists
-                ? "输入口令，解锁这台设备上的聊天记录。"
-                : "创建你的本地身份，邀请一位朋友加入。"}
-            </p>
-            {isIOS && !standalone ? (
-              <div className="install-guide">
-                <Smartphone />
-                <h3>先添加到主屏幕</h3>
-                <p>
-                  在 Safari 点击分享按钮，选择“添加到主屏幕”，再从桌面打开 INOU
-                  开始使用。
-                </p>
-                <small>
-                  请在主屏幕应用中创建身份，以免记录保存在其他浏览器实例。
-                </small>
+            <h2>从一段对话开始</h2>
+            <p className="muted">创建你的本地身份，邀请一位朋友加入。</p>
+            {ready === "loading" && (
+              <div className="working">
+                <LoaderCircle className="spin" size={18} /> 正在打开…
               </div>
-            ) : (
-              <form onSubmit={submitAuth}>
-                {!exists && (
+            )}
+            {ready === "error" && (
+              <>
+                <div role="alert" className="error">
+                  {error}
+                </div>
+                <button className="primary full" onClick={boot}>
+                  重试
+                </button>
+                {bootNeedsReset && (
+                  <button
+                    className="text-btn full danger"
+                    onClick={() =>
+                      run(async () => {
+                        await deleteVault();
+                        setError("");
+                        setReady("create");
+                      })
+                    }
+                  >
+                    清除本机资料并重新开始
+                  </button>
+                )}
+              </>
+            )}
+            {ready === "create" &&
+              (isIOS && !standalone ? (
+                <div className="install-guide">
+                  <Smartphone />
+                  <h3>先添加到主屏幕</h3>
+                  <p>
+                    在 Safari 点击分享按钮，选择“添加到主屏幕”，再从桌面打开
+                    INOU 开始使用。
+                  </p>
+                  <small>
+                    请在主屏幕应用中创建身份，以免记录保存在其他浏览器实例。
+                  </small>
+                </div>
+              ) : (
+                <form onSubmit={submitAuth}>
                   <label>
                     你的昵称
                     <input
@@ -540,53 +544,17 @@ function App() {
                       autoComplete="nickname"
                     />
                   </label>
-                )}
-                <label>
-                  {exists ? "解锁口令" : "设置解锁口令"}
-                  <input
-                    name="password"
-                    type="password"
-                    placeholder={
-                      exists ? "输入本机解锁口令" : "至少 8 位，建议使用长口令"
-                    }
-                    required
-                    minLength={exists ? 1 : 8}
-                    autoComplete={exists ? "current-password" : "new-password"}
-                  />
-                </label>
-                {!exists && (
-                  <label>
-                    确认口令
-                    <input
-                      name="confirm"
-                      type="password"
-                      placeholder="再次输入解锁口令"
-                      required
-                      autoComplete="new-password"
-                    />
-                  </label>
-                )}
-                {error && (
-                  <div role="alert" className="error">
-                    {error}
-                  </div>
-                )}
-                <button
-                  className="primary full"
-                  disabled={busy || exists === null}
-                >
-                  {busy ? <LoaderCircle className="spin" size={18} /> : null}
-                  {exists ? "解锁聊天" : "创建本地身份"}
-                  <ArrowUpRight size={18} />
-                </button>
-              </form>
-            )}
-            <div className="auth-note">
-              <ShieldCheck size={19} />
-              <span>
-                口令不会上传。忘记口令或清理网站数据后，未备份的聊天记录将无法恢复。
-              </span>
-            </div>
+                  {error && (
+                    <div role="alert" className="error">
+                      {error}
+                    </div>
+                  )}
+                  <button className="primary full" disabled={busy}>
+                    {busy ? <LoaderCircle className="spin" size={18} /> : null}
+                    创建本地身份 <ArrowUpRight size={18} />
+                  </button>
+                </form>
+              ))}
             <span className="dev-label">开发预览 0.1 · 请勿用于敏感通信</span>
           </div>
         </main>
@@ -752,11 +720,6 @@ function App() {
               >
                 <Smartphone />
                 <span>安装到主屏幕</span>
-                <ChevronRight />
-              </button>
-              <button className="settings-row" onClick={() => run(lock)}>
-                <LockKeyhole />
-                <span>锁定应用</span>
                 <ChevronRight />
               </button>
               <div className="profile-info">
@@ -1007,7 +970,7 @@ function App() {
                 />
                 <div className="composer-bottom">
                   <span>
-                    <LockKeyhole size={12} /> 本机加密保存
+                    <LockKeyhole size={12} /> 记录只存本机
                   </span>
                   <button
                     className="send-btn"
