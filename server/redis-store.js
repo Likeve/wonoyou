@@ -54,7 +54,7 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
     },
     async createSession(token, device, name = "") {
       const payload = JSON.stringify({ publicKey: device.publicKey, name });
-      await redis.multi().set(key("device:" + device.id), payload, "NX")
+      await redis.multi().set(key("device:" + device.id), payload)
         .set(key("session:" + digest(token)), device.id, "EX", 43200).exec().then(checkTransaction);
     },
     async session(token) { return typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token)

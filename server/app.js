@@ -106,11 +106,10 @@ export function createApp({
       )
         return error(res, 401, "设备验证失败");
       const displayName = typeof name === "string" ? name.trim().slice(0, 32) : "";
-      db.prepare("INSERT OR IGNORE INTO devices(id, public_key, name) VALUES(?,?,?)").run(
-        c.id,
-        c.publicKey,
-        displayName,
-      );
+      db.prepare(
+        `INSERT INTO devices(id, public_key, name) VALUES(?,?,?)
+         ON CONFLICT(id) DO UPDATE SET public_key=excluded.public_key, name=excluded.name`,
+      ).run(c.id, c.publicKey, displayName);
       const token = randomBytes(32).toString("base64url");
       sessions.set(token, { id: c.id, expires: Date.now() + 12 * 3600000 });
       res.json({ token, id: c.id });
@@ -217,8 +216,9 @@ export function createApp({
     res.json({ ok: true });
   });
   app.get("/api/ice", (req, res) => {
-    const iceServers = [];
-    if (process.env.STUN_URL) iceServers.push({ urls: process.env.STUN_URL });
+    const iceServers = [
+      { urls: process.env.STUN_URL || "stun:stun.l.google.com:19302" },
+    ];
     if (process.env.TURN_URL && process.env.TURN_SECRET) {
       const username = `${Math.floor(Date.now() / 1000) + 3600}:${req.deviceId}`;
       iceServers.push({

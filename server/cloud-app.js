@@ -131,8 +131,9 @@ export function createCloudApp({
     await store.unblock(req.deviceId, req.params.peer); res.json({ ok: true });
   });
   app.get("/api/ice", (req, res) => {
-    const iceServers = [];
-    if (process.env.STUN_URL) iceServers.push({ urls: process.env.STUN_URL.split(",") });
+    const iceServers = [
+      { urls: (process.env.STUN_URL || "stun:stun.l.google.com:19302").split(",") },
+    ];
     const relayConfigured = !!(process.env.TURN_URL && process.env.TURN_SECRET);
     if (relayConfigured) {
       const username = `${Math.floor(Date.now() / 1000) + 3600}:${req.deviceId}`;

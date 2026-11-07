@@ -125,6 +125,43 @@ test("identity lookup previews the peer name and rejects unknown codes", async (
     400,
   );
 });
+test("re-registering a device updates its display name", async () => {
+  const keys = await webcrypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicKey = Buffer.from(
+    await webcrypto.subtle.exportKey("spki", keys.publicKey),
+  ).toString("base64");
+  const register = async (name) => {
+    const c = await request("challenge", {
+      method: "POST",
+      body: { publicKey },
+    });
+    const signature = Buffer.from(
+      await webcrypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        keys.privateKey,
+        Buffer.from("INOU-AUTH:" + c.nonce),
+      ),
+    ).toString("base64");
+    return request("session", {
+      method: "POST",
+      body: { nonce: c.nonce, signature, name },
+    });
+  };
+  const first = await register();
+  assert.equal(
+    (await request("identity/" + first.id, { token: first.token })).name,
+    "",
+  );
+  const second = await register("No.2");
+  assert.equal(
+    (await request("identity/" + second.id, { token: second.token })).name,
+    "No.2",
+  );
+});
 test("self-add, malformed and unknown identity codes are rejected", async () => {
   const a = await identity();
   assert.equal(
