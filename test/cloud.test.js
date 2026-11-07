@@ -59,6 +59,8 @@ test("cloud: shared authentication, identity-code contacts, cross-instance signa
     assert.deepEqual(contacts.contacts.map(c => c.id), [friend.id]);
     assert.equal((await request(b, "identity/" + alice.id, { token: friend.token })).name, "小林");
     const wsA = await connect(a, alice.token), wsB = await connect(b, friend.token);
+    assert.equal((await request(b, "contacts", { token: alice.token })).contacts[0].online, true);
+    assert.equal((await request(a, "contacts", { token: friend.token })).contacts[0].online, true);
     const received = waitMessage(wsB, m => m.type === "signal");
     const marker = "transient-signal-" + randomUUID();
     wsA.send(JSON.stringify({ type: "signal", to: friend.id, payload: marker, signature: "test" }));
