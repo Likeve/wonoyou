@@ -84,7 +84,11 @@ const cameraError = (e) => {
     return "没有找到可用的摄像头。";
   if (name === "NotReadableError")
     return "摄像头正被其他应用占用，请稍后再试。";
-  return "无法启动摄像头，请改用输入邀请码。";
+  return (
+    "无法启动摄像头（" +
+    (name || e?.message || "未知错误") +
+    "），请改用输入邀请码。"
+  );
 };
 
 function InviteQR({ value }) {
@@ -93,7 +97,7 @@ function InviteQR({ value }) {
     let ok = true;
     QRCode.toDataURL(value, {
       errorCorrectionLevel: "M",
-      margin: 1,
+      margin: 4,
       width: 260,
       color: { dark: "#1f4d36", light: "#ffffff" },
     })
@@ -124,6 +128,10 @@ function Scanner({ onResult, onCancel }) {
   const [starting, setStarting] = useState(true);
   useEffect(() => {
     let stopped = false;
+    const stopStream = () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -132,7 +140,7 @@ function Scanner({ onResult, onCancel }) {
           return;
         }
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
+          video: { facingMode: { ideal: "environment" } },
           audio: false,
         });
         if (stopped) {
@@ -142,17 +150,27 @@ function Scanner({ onResult, onCancel }) {
         streamRef.current = stream;
         const video = videoRef.current;
         video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
         video.setAttribute("playsinline", "true");
-        await video.play();
+        video.setAttribute("autoplay", "true");
+        // Best-effort play. iOS Safari can reject the play() promise if the
+        // frame isn't ready yet; the RAF loop below waits for readyState, so a
+        // rejection here must not abort the scanner.
+        video.play().catch(() => {});
         setStarting(false);
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         const tick = () => {
           if (stopped || doneRef.current) return;
           if (video.readyState >= video.HAVE_ENOUGH_DATA) {
-            const w = video.videoWidth,
-              h = video.videoHeight;
-            if (w && h) {
+            const vw = video.videoWidth,
+              vh = video.videoHeight;
+            if (vw && vh) {
+              // Downscale large camera frames so jsQR stays responsive on phones.
+              const scale = Math.min(1, 720 / Math.max(vw, vh)),
+                w = Math.max(1, Math.round(vw * scale)),
+                h = Math.max(1, Math.round(vh * scale));
               canvas.width = w;
               canvas.height = h;
               ctx.drawImage(video, 0, 0, w, h);
@@ -162,7 +180,7 @@ function Scanner({ onResult, onCancel }) {
               });
               if (code?.data) {
                 doneRef.current = true;
-                streamRef.current?.getTracks().forEach((t) => t.stop());
+                stopStream();
                 onResultRef.current(code.data);
                 return;
               }
@@ -172,9 +190,11 @@ function Scanner({ onResult, onCancel }) {
         };
         rafRef.current = requestAnimationFrame(tick);
       } catch (e) {
+        console.error("INOU scanner error:", e);
         if (!stopped) {
           setError(cameraError(e));
           setStarting(false);
+          stopStream();
         }
       }
     })();
@@ -182,8 +202,7 @@ function Scanner({ onResult, onCancel }) {
       stopped = true;
       doneRef.current = true;
       cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+      stopStream();
     };
   }, []);
   return (
