@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.data/
+.env
+.env.*
+!.env.example
+.vercel/
+output/
+.playwright-cli/
+docs/.qa*/
+docs/.qa*
+.DS_Store

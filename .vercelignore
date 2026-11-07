@@ -1,0 +1,12 @@
+.data
+.env*
+!.env.example
+output
+docs
+test
+scripts
+.playwright-cli
+.git
+node_modules
+dist
+启动INOU.command

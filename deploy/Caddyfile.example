@@ -1,0 +1,5 @@
+# Configure DNS and replace this domain before using.
+chat.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8787
+}
