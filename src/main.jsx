@@ -51,6 +51,14 @@ import {
   digest,
 } from "./vault";
 import { ChatEngine } from "./engine";
+import {
+  hasSupabase,
+  currentSession,
+  signIn,
+  signUp,
+  signOut,
+  readableAuthError,
+} from "./auth";
 import "./style.css";
 const logo = (
   <span className="brand-mark">
@@ -206,7 +214,12 @@ function Scanner({ onResult, onCancel, stream }) {
 }
 
 function App() {
-  const [ready, setReady] = useState("loading"),
+  const [auth, setAuth] = useState("loading"),
+    [authMode, setAuthMode] = useState("login"),
+    [authError, setAuthError] = useState(""),
+    [authBusy, setAuthBusy] = useState(false),
+    [userEmail, setUserEmail] = useState(""),
+    [ready, setReady] = useState("loading"),
     [bootNeedsReset, setBootNeedsReset] = useState(false),
     [vault, setVault] = useState(null),
     [view, setView] = useState("chats"),
@@ -258,18 +271,32 @@ function App() {
       setBusy(false);
     }
   };
-  async function boot() {
+  const enterApp = async () => {
     setError("");
     setBootNeedsReset(false);
+    if (await hasVault()) {
+      try {
+        await start(await loadVault());
+      } catch (e) {
+        if (/版本过旧|已损坏/.test(e.message)) setBootNeedsReset(true);
+        throw e;
+      }
+    } else setReady("create");
+  };
+  async function boot() {
+    setError("");
     try {
-      if (await hasVault()) {
-        try {
-          await start(await loadVault());
-        } catch (e) {
-          if (/版本过旧|已损坏/.test(e.message)) setBootNeedsReset(true);
-          throw e;
+      if (hasSupabase()) {
+        const session = await currentSession();
+        if (!session) {
+          setAuth("signedOut");
+          setReady("loading");
+          return;
         }
-      } else setReady("create");
+        setUserEmail(session.user?.email || "");
+      }
+      setAuth("signedIn");
+      await enterApp();
     } catch (e) {
       setError(e.message || "无法使用本地存储");
       setReady("error");
@@ -479,6 +506,48 @@ function App() {
           state.messages.filter((m) => m.peer === id).at(-1)?.time || 0;
         return last(b.id) - last(a.id);
       }) || [];
+  const handleAccountAuth = (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target),
+      email = data.get("email"),
+      password = data.get("password");
+    setAuthBusy(true);
+    setAuthError("");
+    (async () => {
+      try {
+        if (authMode === "login") {
+          await signIn(email, password);
+        } else {
+          const r = await signUp(email, password);
+          if (!r.session) {
+            setAuthError("注册成功，请查收验证邮件后再登录。");
+            setAuthMode("login");
+            return;
+          }
+        }
+        setAuth("signedIn");
+        setUserEmail(String(email || "").trim());
+        await enterApp();
+      } catch (e) {
+        setAuthError(readableAuthError(e));
+      } finally {
+        setAuthBusy(false);
+      }
+    })();
+  };
+  const logout = () =>
+    run(async () => {
+      await signOut();
+      engine.current?.stop();
+      engine.current = null;
+      release.current?.();
+      release.current = null;
+      setVault(null);
+      setSelected(null);
+      setView("chats");
+      setReady("loading");
+      setAuth("signedOut");
+    });
   const submitAuth = (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
@@ -486,6 +555,70 @@ function App() {
       await start(await createVault(data.get("name").trim() || "我"));
     });
   };
+  if (auth === "signedOut")
+    return (
+      <div className="onboard">
+        <div className="intro">
+          <div className="wordmark">
+            {logo}
+            <b>INOU</b>
+            <span>私域聊天</span>
+          </div>
+        </div>
+        <main className="auth">
+          <div className="auth-inner">
+            <div className="auth-icon">
+              <MessageCircle size={28} />
+            </div>
+            <h2>{authMode === "login" ? "登录 INOU" : "注册账号"}</h2>
+            <p className="muted">邮箱登录，聊天记录只保存在本机。</p>
+            <form onSubmit={handleAccountAuth}>
+              <label>
+                邮箱
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="username"
+                  placeholder="you@example.com"
+                />
+              </label>
+              <label>
+                密码
+                <input
+                  name="password"
+                  type="password"
+                  required
+                  minLength={6}
+                  autoComplete={
+                    authMode === "login" ? "current-password" : "new-password"
+                  }
+                  placeholder="至少 6 位"
+                />
+              </label>
+              {authError && (
+                <div role="alert" className="error">
+                  {authError}
+                </div>
+              )}
+              <button className="primary full" disabled={authBusy}>
+                {authBusy ? <LoaderCircle className="spin" size={18} /> : null}
+                {authMode === "login" ? "登录" : "注册"}
+              </button>
+            </form>
+            <button
+              className="text-btn full"
+              onClick={() => {
+                setAuthMode(authMode === "login" ? "register" : "login");
+                setAuthError("");
+              }}
+            >
+              {authMode === "login" ? "没有账号？注册一个" : "已有账号？去登录"}
+            </button>
+          </div>
+        </main>
+      </div>
+    );
   if (!vault)
     return (
       <div className="onboard">
@@ -782,6 +915,20 @@ function App() {
                 <span>安装到主屏幕</span>
                 <ChevronRight />
               </button>
+              {hasSupabase() && (
+                <>
+                  <div className="profile-info">
+                    <ShieldCheck size={19} />
+                    <h4>当前账号</h4>
+                    <p>{userEmail || "已登录"}</p>
+                  </div>
+                  <button className="settings-row danger" onClick={logout}>
+                    <LogOut />
+                    <span>退出登录</span>
+                    <ChevronRight />
+                  </button>
+                </>
+              )}
               <div className="profile-info">
                 <ShieldCheck size={19} />
                 <h4>你的记录，你来保管</h4>
