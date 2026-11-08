@@ -55,16 +55,7 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
     async createSession(token, device, name = "") {
       const payload = JSON.stringify({ publicKey: device.publicKey, name });
       await redis.multi().set(key("device:" + device.id), payload)
-        .zadd(key("deviceIndex"), 0, device.id)
         .set(key("session:" + digest(token)), device.id, "EX", 43200).exec().then(checkTransaction);
-    },
-    async deviceByPrefix(prefix) {
-      const ids = await redis.zrangebylex(key("deviceIndex"), "[" + prefix, "[" + prefix + "\xff", "LIMIT", 0, 2);
-      if (!ids.length) return [];
-      const values = await redis.mget(...ids.map((id) => key("device:" + id)));
-      return ids
-        .map((id, i) => ({ id, ...parseDevice(values[i]) }))
-        .filter((d) => d.publicKey);
     },
     async session(token) { return typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token)
       ? redis.get(key("session:" + digest(token))) : null; },

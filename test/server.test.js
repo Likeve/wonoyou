@@ -121,19 +121,11 @@ test("identity lookup previews the peer name and rejects unknown codes", async (
     b = await identity("阿青");
   assert.equal((await request("identity/" + b.id, { token: a.token })).name, "阿青");
   assert.equal(
-    (await request("identity/" + b.id.slice(0, 6), { token: a.token })).name,
-    "阿青",
-  );
-  assert.equal(
     (await request("identity/" + "f".repeat(64), { token: a.token })).status,
     400,
   );
   assert.equal(
     (await request("identity/" + "not-a-code", { token: a.token })).status,
-    400,
-  );
-  assert.equal(
-    (await request("identity/" + "12345", { token: a.token })).status,
     400,
   );
 });
