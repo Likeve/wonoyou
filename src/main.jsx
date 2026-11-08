@@ -147,26 +147,23 @@ function Scanner({ onResult, onCancel }) {
           setStarting(false);
           return;
         }
-        let stream;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" } },
-            audio: false,
-          });
-        } catch (firstError) {
-          if (
-            firstError?.name === "OverconstrainedError" ||
-            firstError?.name === "NotFoundError"
-          ) {
-            // 桌面端或没有后置摄像头的设备，回退到任意可用摄像头。
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: false,
-            });
-          } else {
-            throw firstError;
+        const attempts = [
+          { video: { facingMode: { ideal: "environment" } }, audio: false },
+          { video: true, audio: false },
+        ];
+        let stream,
+          lastError;
+        for (const constraints of attempts) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            break;
+          } catch (e) {
+            lastError = e;
+            if (e?.name === "NotAllowedError" || e?.name === "SecurityError")
+              throw e;
           }
         }
+        if (!stream) throw lastError || Error("无法获取摄像头");
         if (stopped) {
           stream.getTracks().forEach((t) => t.stop());
           return;
