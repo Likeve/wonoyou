@@ -303,6 +303,27 @@ label input {
   height: 46px;
   width: 46px;
 }
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 18px 0 14px;
+}
+.recovery-word {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f3f6f3;
+  border: 1px solid #e3e9e3;
+  border-radius: 8px;
+  padding: 10px 8px;
+  font-size: 16px;
+  color: #263c2e;
+}
+.recovery-word span {
+  color: #9aa49b;
+  font-size: 10px;
+}
 input::placeholder {
   color: #b0b7b1;
   font-size: 14px;

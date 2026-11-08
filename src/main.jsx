@@ -58,6 +58,9 @@ import {
   signUp,
   signOut,
   readableAuthError,
+  generateRecoveryPhrase,
+  storeRecovery,
+  requestRecovery,
 } from "./auth";
 import "./style.css";
 const logo = (
@@ -226,6 +229,7 @@ function App() {
     [authBusy, setAuthBusy] = useState(false),
     [accountName, setAccountName] = useState(""),
     [username, setUsername] = useState(genUsername),
+    [recoveryPhrase, setRecoveryPhrase] = useState(""),
     [ready, setReady] = useState("loading"),
     [bootNeedsReset, setBootNeedsReset] = useState(false),
     [vault, setVault] = useState(null),
@@ -522,23 +526,28 @@ function App() {
     const data = new FormData(e.target),
       name = String(data.get("username") || "").trim(),
       password = String(data.get("password") || ""),
-      confirm = String(data.get("confirm") || "");
+      confirm = String(data.get("confirm") || ""),
+      phrase = String(data.get("phrase") || "").trim().replace(/\s+/g, " ");
     if (!name) {
       setAuthError("请输入用户名");
-      return;
-    }
-    if (password.length < 6) {
-      setAuthError("密码至少需要 6 位");
-      return;
-    }
-    if (authMode === "register" && password !== confirm) {
-      setAuthError("两次输入的密码不一致");
       return;
     }
     setAuthBusy(true);
     setAuthError("");
     (async () => {
       try {
+        if (authMode === "recover") {
+          if (!phrase) throw Error("请输入找回密钥");
+          if (password.length < 6) throw Error("新密码至少需要 6 位");
+          if (password !== confirm) throw Error("两次输入的新密码不一致");
+          await requestRecovery(name, phrase, password);
+          flash("密码已重置，请用新密码登录");
+          setAuthMode("login");
+          return;
+        }
+        if (password.length < 6) throw Error("密码至少需要 6 位");
+        if (authMode === "register" && password !== confirm)
+          throw Error("两次输入的密码不一致");
         if (authMode === "login") {
           const r = await signIn(name, password);
           userIdRef.current = r.user?.id || "";
@@ -551,6 +560,12 @@ function App() {
             return;
           }
           userIdRef.current = r.user?.id || "";
+          const words = generateRecoveryPhrase();
+          await storeRecovery(name, words.join(" ")).catch(() => {});
+          setRecoveryPhrase(words.join(" "));
+          setAuth("signedIn");
+          setAccountName(name);
+          return;
         }
         setAuth("signedIn");
         setAccountName(name);
@@ -562,6 +577,16 @@ function App() {
       }
     })();
   };
+  const copyRecovery = () =>
+    run(async () => {
+      await navigator.clipboard.writeText(recoveryPhrase);
+      flash("找回密钥已复制");
+    });
+  const confirmRecovery = () =>
+    run(async () => {
+      setRecoveryPhrase("");
+      await enterApp(userIdRef.current);
+    });
   const logout = () =>
     run(async () => {
       await signOut();
@@ -603,8 +628,18 @@ function App() {
             <div className="auth-icon">
               <MessageCircle size={28} />
             </div>
-            <h2>{authMode === "login" ? "登录 INOU" : "注册账号"}</h2>
-            <p className="muted">用户名登录，聊天记录只保存在本机。</p>
+            <h2>
+              {authMode === "login"
+                ? "登录 INOU"
+                : authMode === "recover"
+                  ? "找回密码"
+                  : "注册账号"}
+            </h2>
+            <p className="muted">
+              {authMode === "recover"
+                ? "输入用户名和注册时保存的 8 个找回词。"
+                : "用户名登录，聊天记录只保存在本机。"}
+            </p>
             <form onSubmit={handleAccountAuth}>
               <label>
                 用户名
@@ -617,18 +652,31 @@ function App() {
                     autoComplete="username"
                     placeholder="输入用户名"
                   />
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label="随机用户名"
-                    onClick={() => setUsername(genUsername())}
-                  >
-                    <RefreshCw size={15} />
-                  </button>
+                  {authMode !== "recover" && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="随机用户名"
+                      onClick={() => setUsername(genUsername())}
+                    >
+                      <RefreshCw size={15} />
+                    </button>
+                  )}
                 </span>
               </label>
+              {authMode === "recover" && (
+                <label>
+                  找回密钥（8 个词，用空格隔开）
+                  <input
+                    name="phrase"
+                    required
+                    autoComplete="off"
+                    placeholder="例如：词 词 词 词 词 词 词 词"
+                  />
+                </label>
+              )}
               <label>
-                密码
+                {authMode === "recover" ? "新密码" : "密码"}
                 <input
                   name="password"
                   type="password"
@@ -640,9 +688,9 @@ function App() {
                   placeholder="至少 6 位"
                 />
               </label>
-              {authMode === "register" && (
+              {authMode !== "login" && (
                 <label>
-                  确认密码
+                  {authMode === "recover" ? "确认新密码" : "确认密码"}
                   <input
                     name="confirm"
                     type="password"
@@ -660,17 +708,73 @@ function App() {
               )}
               <button className="primary full" disabled={authBusy}>
                 {authBusy ? <LoaderCircle className="spin" size={18} /> : null}
-                {authMode === "login" ? "登录" : "注册"}
+                {authMode === "login"
+                  ? "登录"
+                  : authMode === "recover"
+                    ? "重置密码"
+                    : "注册"}
               </button>
             </form>
             <button
               className="text-btn full"
               onClick={() => {
-                setAuthMode(authMode === "login" ? "register" : "login");
+                setAuthMode(authMode === "recover" ? "login" : authMode === "login" ? "register" : "login");
                 setAuthError("");
               }}
             >
-              {authMode === "login" ? "没有账号？注册一个" : "已有账号？去登录"}
+              {authMode === "login"
+                ? "没有账号？注册一个"
+                : authMode === "recover"
+                  ? "返回登录"
+                  : "已有账号？去登录"}
+            </button>
+            {authMode === "login" && (
+              <button
+                className="text-btn full"
+                onClick={() => {
+                  setAuthMode("recover");
+                  setAuthError("");
+                }}
+              >
+                忘记密码？用找回密钥重置
+              </button>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  if (recoveryPhrase)
+    return (
+      <div className="onboard">
+        <div className="intro">
+          <div className="wordmark">
+            {logo}
+            <b>INOU</b>
+            <span>私域聊天</span>
+          </div>
+        </div>
+        <main className="auth">
+          <div className="auth-inner">
+            <div className="auth-icon">
+              <KeyRound size={28} />
+            </div>
+            <h2>请保存你的找回密钥</h2>
+            <p className="muted">
+              下面 8 个词是找回密码的唯一凭证，只显示这一次。请抄写或复制到安全的地方，不要泄露给任何人。
+            </p>
+            <div className="recovery-grid">
+              {recoveryPhrase.split(" ").map((w, i) => (
+                <div className="recovery-word" key={i}>
+                  <span>{i + 1}</span>
+                  {w}
+                </div>
+              ))}
+            </div>
+            <button className="primary full" onClick={copyRecovery}>
+              <Copy size={17} /> 复制密钥
+            </button>
+            <button className="secondary full" onClick={confirmRecovery}>
+              我已保存，进入应用
             </button>
           </div>
         </main>
