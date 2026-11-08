@@ -221,7 +221,7 @@ function Scanner({ onResult, onCancel, stream }) {
 
 function App() {
   const [auth, setAuth] = useState("loading"),
-    [authMode, setAuthMode] = useState("login"),
+    [authMode, setAuthMode] = useState("register"),
     [authError, setAuthError] = useState(""),
     [authBusy, setAuthBusy] = useState(false),
     [accountName, setAccountName] = useState(""),
