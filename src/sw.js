@@ -45,7 +45,11 @@ self.addEventListener("notificationclick", (event) => {
       });
       for (const client of clients) {
         if ("focus" in client) {
-          await client.navigate(url.href);
+          try {
+            await client.navigate(url.href);
+          } catch {
+            // 某些环境不支持 navigate，聚焦已有窗口即可。
+          }
           return client.focus();
         }
       }
