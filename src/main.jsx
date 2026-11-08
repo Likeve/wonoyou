@@ -87,7 +87,7 @@ function Avatar({ name = "", id = "", large = false }) {
 const cameraError = (e) => {
   const name = e?.name || "";
   if (name === "NotAllowedError" || name === "SecurityError")
-    return "没有摄像头权限，请在系统设置中允许访问。";
+    return "没有摄像头权限。请到 iPhone「设置 → 隐私与安全性 → 相机」允许 Safari 或 INOU 访问后重试。";
   if (name === "NotFoundError" || name === "OverconstrainedError")
     return "没有找到可用的摄像头。";
   if (name === "NotReadableError")
