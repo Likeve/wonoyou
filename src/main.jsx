@@ -79,6 +79,12 @@ const normalizeId = (s) =>
   String(s || "")
     .toLowerCase()
     .replace(/[^0-9a-f]/g, "");
+const genUsername = () => {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let s = "inou-";
+  for (const b of crypto.getRandomValues(new Uint8Array(6))) s += chars[b % chars.length];
+  return s;
+};
 function Avatar({ name = "", id = "", large = false }) {
   return (
     <div
@@ -218,7 +224,8 @@ function App() {
     [authMode, setAuthMode] = useState("login"),
     [authError, setAuthError] = useState(""),
     [authBusy, setAuthBusy] = useState(false),
-    [userEmail, setUserEmail] = useState(""),
+    [accountName, setAccountName] = useState(""),
+    [username, setUsername] = useState(genUsername),
     [ready, setReady] = useState("loading"),
     [bootNeedsReset, setBootNeedsReset] = useState(false),
     [vault, setVault] = useState(null),
@@ -296,7 +303,7 @@ function App() {
           setReady("loading");
           return;
         }
-        setUserEmail(session.user?.email || "");
+        setAccountName(session.user?.user_metadata?.username || "");
         userIdRef.current = session.user?.id || "";
       }
       setAuth("signedIn");
@@ -513,26 +520,40 @@ function App() {
   const handleAccountAuth = (e) => {
     e.preventDefault();
     const data = new FormData(e.target),
-      email = data.get("email"),
-      password = data.get("password");
+      name = String(data.get("username") || "").trim(),
+      password = String(data.get("password") || ""),
+      confirm = String(data.get("confirm") || "");
+    if (!name) {
+      setAuthError("请输入用户名");
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError("密码至少需要 6 位");
+      return;
+    }
+    if (authMode === "register" && password !== confirm) {
+      setAuthError("两次输入的密码不一致");
+      return;
+    }
     setAuthBusy(true);
     setAuthError("");
     (async () => {
       try {
         if (authMode === "login") {
-          const r = await signIn(email, password);
+          const r = await signIn(name, password);
           userIdRef.current = r.user?.id || "";
         } else {
-          const r = await signUp(email, password);
+          const r = await signUp(name, password);
           if (!r.session) {
-            setAuthError("注册成功，请查收验证邮件后再登录。");
-            setAuthMode("login");
+            setAuthError(
+              "注册未完成：请在 Supabase 的 Authentication → Email 中关闭「Confirm email」，因为本应用不发送邮件。",
+            );
             return;
           }
           userIdRef.current = r.user?.id || "";
         }
         setAuth("signedIn");
-        setUserEmail(String(email || "").trim());
+        setAccountName(name);
         await enterApp(userIdRef.current);
       } catch (e) {
         setAuthError(readableAuthError(e));
@@ -583,17 +604,28 @@ function App() {
               <MessageCircle size={28} />
             </div>
             <h2>{authMode === "login" ? "登录 INOU" : "注册账号"}</h2>
-            <p className="muted">邮箱登录，聊天记录只保存在本机。</p>
+            <p className="muted">用户名登录，聊天记录只保存在本机。</p>
             <form onSubmit={handleAccountAuth}>
               <label>
-                邮箱
-                <input
-                  name="email"
-                  type="email"
-                  required
-                  autoComplete="username"
-                  placeholder="you@example.com"
-                />
+                用户名
+                <span className="username-row">
+                  <input
+                    name="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                    autoComplete="username"
+                    placeholder="输入用户名"
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="随机用户名"
+                    onClick={() => setUsername(genUsername())}
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                </span>
               </label>
               <label>
                 密码
@@ -608,6 +640,19 @@ function App() {
                   placeholder="至少 6 位"
                 />
               </label>
+              {authMode === "register" && (
+                <label>
+                  确认密码
+                  <input
+                    name="confirm"
+                    type="password"
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="再输入一次"
+                  />
+                </label>
+              )}
               {authError && (
                 <div role="alert" className="error">
                   {authError}
@@ -932,7 +977,7 @@ function App() {
                   <div className="profile-info">
                     <ShieldCheck size={19} />
                     <h4>当前账号</h4>
-                    <p>{userEmail || "已登录"}</p>
+                    <p>{accountName || "已登录"}</p>
                   </div>
                   <button className="settings-row danger" onClick={logout}>
                     <LogOut />

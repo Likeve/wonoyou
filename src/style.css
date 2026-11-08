@@ -289,6 +289,20 @@ label input {
   margin-top: 9px;
   color: #263c2e;
 }
+.username-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+}
+.username-row input {
+  flex: 1;
+  margin-top: 0;
+}
+.username-row .icon-btn {
+  flex-shrink: 0;
+  height: 46px;
+  width: 46px;
+}
 input::placeholder {
   color: #b0b7b1;
   font-size: 14px;
