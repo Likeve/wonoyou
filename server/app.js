@@ -285,7 +285,15 @@ export function createApp({
       JSON.stringify(envelope),
       envelope.time,
     );
-    await notifyDevice(to, { title: "INOU", body: "你收到一条新消息", data: { peer: req.deviceId } });
+    const badge = db
+      .prepare("SELECT COUNT(*) AS c FROM mailbox WHERE owner=?")
+      .get(to).c;
+    await notifyDevice(to, {
+      title: "INOU",
+      body: "你收到一条新消息",
+      data: { peer: req.deviceId },
+      badge,
+    });
     res.json({ ok: true, id: envelope.id });
   });
   app.get("/api/mailbox", (req, res) => {

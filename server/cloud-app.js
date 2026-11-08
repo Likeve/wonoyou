@@ -169,7 +169,12 @@ export function createCloudApp({
     if (!(await store.related(req.deviceId, to))) return fail(res, 403, "只能发送给好友");
     const envelope = { id: randomUUID(), from: req.deviceId, to, box: req.body.box, time: Date.now() };
     await store.mailboxPush(to, envelope);
-    await notifyDevice(to, { title: "INOU", body: "你收到一条新消息", data: { peer: req.deviceId } });
+    await notifyDevice(to, {
+      title: "INOU",
+      body: "你收到一条新消息",
+      data: { peer: req.deviceId },
+      badge: await store.mailboxCount(to),
+    });
     res.json({ ok: true, id: envelope.id });
   });
   app.get("/api/mailbox", async (req, res) => {

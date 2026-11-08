@@ -391,6 +391,17 @@ function App() {
       history.replaceState(null, "", location.pathname);
     }
   }, [vault, version]);
+  useEffect(() => {
+    if (!vault || !("setAppBadge" in navigator)) return;
+    const unread = state.messages.filter(
+      (m) =>
+        m.sender !== state.identity.id &&
+        m.time > (state.contacts.find((c) => c.id === m.peer)?.lastRead || 0),
+    ).length;
+    if (unread > 0) navigator.setAppBadge(unread).catch(() => {});
+    else if ("clearAppBadge" in navigator)
+      navigator.clearAppBadge().catch(() => {});
+  }, [vault, version]);
   const toggleNotifications = () =>
     run(async () => {
       if (notif === "granted") {

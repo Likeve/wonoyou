@@ -21,14 +21,23 @@ self.addEventListener("push", (event) => {
     // 兼容非 JSON 推送。
   }
   const peer = payload.data?.peer;
+  const badge = Number(payload.badge);
   event.waitUntil(
-    self.registration.showNotification(payload.title || "INOU", {
-      body: payload.body || "你收到一条新消息",
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
-      tag: peer ? "inou-" + peer : "inou-message",
-      data: payload.data || {},
-    }),
+    (async () => {
+      if (Number.isInteger(badge) && badge >= 0 && "setAppBadge" in navigator) {
+        try {
+          await navigator.setAppBadge(badge);
+        } catch {
+          // 环境不支持图标角标时忽略。
+        }
+      }
+      return self.registration.showNotification(payload.title || "INOU", {
+        body: payload.body || "你收到一条新消息",
+        icon: "/icon-192.png",
+        tag: peer ? "inou-" + peer : "inou-message",
+        data: payload.data || {},
+      });
+    })(),
   );
 });
 

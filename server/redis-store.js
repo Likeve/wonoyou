@@ -124,6 +124,7 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
     async mailboxTake(id, count) {
       if (count > 0) await redis.ltrim(key("mailbox:" + id), count, -1);
     },
+    async mailboxCount(id) { return redis.llen(key("mailbox:" + id)); },
     async claim(id, lease) { await redis.set(key("presence:" + id), lease, "EX", 75); },
     async owns(id, lease) { return (await redis.get(key("presence:" + id))) === lease; },
     async renew(id, lease) { return !!(await evalScript(`if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('EXPIRE',KEYS[1],75) end; return 0`, ["presence:" + id], [lease])); },
