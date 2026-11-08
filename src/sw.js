@@ -7,8 +7,21 @@ import { NavigationRoute, registerRoute } from "workbox-routing";
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
+self.skipWaiting();
+self.clientsClaim();
+
+const cachedIndex = createHandlerBoundToURL("index.html");
+const networkFirst = async ({ request }) => {
+  try {
+    const response = await fetch(request);
+    if (response && response.status < 400) return response;
+  } catch {
+    // 离线时回退到预缓存的页面。
+  }
+  return cachedIndex({ request });
+};
 registerRoute(
-  new NavigationRoute(createHandlerBoundToURL("index.html"), {
+  new NavigationRoute(networkFirst, {
     denylist: [/^\/api/, /^\/signal/],
   }),
 );
