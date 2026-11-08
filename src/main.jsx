@@ -913,6 +913,11 @@ function App() {
                                   <Clock3 size={11} />
                                   等待双方上线
                                 </>
+                              ) : m.status === "sent" ? (
+                                <>
+                                  <Check size={11} />
+                                  已投递
+                                </>
                               ) : m.status === "delivered" ? (
                                 <>
                                   <Check size={11} />

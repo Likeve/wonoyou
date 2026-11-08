@@ -33,6 +33,7 @@ export class ChatEngine {
     this.receiveQueue = Promise.resolve();
     this.syncQueue = Promise.resolve();
     this.retrying = false;
+    this.lastMailbox = 0;
   }
   emit() {
     this.onChange();
@@ -319,7 +320,7 @@ export class ChatEngine {
           x.id === m.id &&
           x.peer === id &&
           x.sender === this.state.identity.id &&
-          x.status === "pending",
+          (x.status === "pending" || x.status === "sent"),
       );
       if (message) {
         message.status = "delivered";
@@ -405,7 +406,16 @@ export class ChatEngine {
     }
     this.emit();
     this.flush(peer).catch(() => {});
-    if (!this.online.has(peer)) this.postMailbox(peer, m).catch(() => {});
+    const p = this.peers.get(peer);
+    if (!p || p.channel?.readyState !== "open") {
+      this.postMailbox(peer, m)
+        .then(() => {
+          if (m.status === "pending") m.status = "sent";
+          return this.vault.save();
+        })
+        .then(() => this.emit())
+        .catch(() => {});
+    }
     return m;
   }
   async flush(id) {
@@ -561,6 +571,10 @@ export class ChatEngine {
     if (!this.connected) {
       await this.connect();
       return;
+    }
+    if (Date.now() - this.lastMailbox > 15000) {
+      this.lastMailbox = Date.now();
+      this.fetchMailbox().catch(() => {});
     }
     await this.flushRelations();
     for (const [id, p] of this.peers) {
