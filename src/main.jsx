@@ -147,10 +147,26 @@ function Scanner({ onResult, onCancel }) {
           setStarting(false);
           return;
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          });
+        } catch (firstError) {
+          if (
+            firstError?.name === "OverconstrainedError" ||
+            firstError?.name === "NotFoundError"
+          ) {
+            // 桌面端或没有后置摄像头的设备，回退到任意可用摄像头。
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: false,
+            });
+          } else {
+            throw firstError;
+          }
+        }
         if (stopped) {
           stream.getTracks().forEach((t) => t.stop());
           return;
