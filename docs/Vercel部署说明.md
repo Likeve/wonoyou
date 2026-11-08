@@ -17,8 +17,8 @@
 - 数据服务：Upstash Redis，`upstash-kv-coral-feather`，当前为 Free 方案。
 - 静态前端：Vite + React + PWA；`api/backend.js` 导出 Node HTTP Server，承接 `/api/*` 和 `/signal`。
 - 本地默认服务仍使用 SQLite；Vercel 服务使用 Redis，不读写本机 `.data`。
-- Redis 保存设备公钥、昵称、好友/封禁关系，以及有过期时间的认证、限流和在线状态。昵称仅用于加好友前的身份确认；聊天正文、图片、身份私钥和备份口令不进入这些数据结构。
-- 信令通过 Redis Pub/Sub 实时转发；不使用消息队列、Streams 或历史消息存储。离线消息仍保留在发送设备，双方重新在线后传送。
+- Redis 保存设备公钥、昵称、好友/封禁关系、推送订阅端点，以及有过期时间的认证、限流、在线状态和加密信箱。昵称仅用于加好友前的身份确认；聊天正文、图片、身份私钥和备份口令不进入这些数据结构。
+- 信令通过 Redis Pub/Sub 实时转发；不使用消息队列、Streams 或历史消息存储。对方不在线时，消息用双方设备密钥派生的会话密钥加密后暂存信箱（仅密文），并通过 Web Push 提醒对方。
 
 ## 环境变量
 
@@ -28,8 +28,10 @@
 | `REDIS_NAMESPACE` | Preview 为 `inou-preview-v1`，Production 为 `inou-production-v1`，分开关系与身份元数据。 |
 | `APP_ORIGIN` | 使用固定域名或别名时填写准确的 HTTPS origin，不带末尾 `/`。部署自身的 `VERCEL_URL` 自动允许。 |
 | `STUN_URL` | 自有 STUN 地址，可逗号分隔；当前未配置。 |
-| `TURN_URL` | 自有 TURN/TURNS 地址，可逗号分隔；当前未配置。 |
-| `TURN_SECRET` | 仅服务端持有，生成有效期一小时的 TURN 临时凭据；当前未配置。 |
+| `TURN_URL` | 自有 TURN 地址，如 `turn:<公网IP>:3478?transport=udp`；已配置腾讯云 coturn。 |
+| `TURN_SECRET` | 仅服务端持有，生成有效期一小时的 TURN 临时凭据；与 coturn 的 `static-auth-secret` 一致。 |
+| `VAPID_PUBLIC_KEY` | Web Push 公钥，前端订阅推送时使用。 |
+| `VAPID_PRIVATE_KEY` | Web Push 私钥，仅服务端持有，用于给推送服务签名。 |
 
 不要给这些变量加 `VITE_` 前缀，也不要将数据库连接字符串放进前端。预览环境的 Secret 不可通过 `vercel env pull` 导出。需要本地测试时，可使用数据库控制台提供的配置，保存到被 Git 忽略的 `.env.cloud-test.local`，文件权限设为 `600`。
 
@@ -72,8 +74,8 @@ REDIS_NAMESPACE=inou-browser-test PORT=8788 npm run start:cloud
 
 ## 仍需完成
 
-1. 配置自有 STUN/TURN；未配置时无法保证不同 NAT 或蜂窝网络之间连接。
-2. 两台 iPhone 在最终 HTTPS 域名下验证安装、后台/锁屏、切网、离线恢复、图片和备份。
+1. 在 Vercel 完成 `TURN_URL` 配置后，验证不同 NAT / 蜂窝网络之间的实时连接（腾讯云 coturn 中继已就绪并通过 Trickle ICE 验证）。
+2. 两台 iPhone 在最终 HTTPS 域名下验证安装到主屏幕、消息通知（后台/锁屏）、切网、离线恢复、图片和备份。iOS 的 Web Push 仅对已安装到主屏幕的 PWA 生效（iOS 16.4+）。
 3. 独立密码与安全评审；当前仍是 WebRTC DTLS + 身份签名信令，未实现应用层 Double Ratchet。
 4. 大量历史与图片的性能测试、流量和 Redis/Vercel 用量监控；免费额度不代表无限用量。
 

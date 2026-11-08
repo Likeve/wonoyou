@@ -4,10 +4,16 @@ import { randomBytes, randomUUID, webcrypto, createHmac } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { resolve } from "node:path";
 import { createRedisStore, digest } from "./redis-store.js";
+import { sendPush } from "./push.js";
 
 const validId = (s) => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
+const normalizeId = (s) => String(s || "").toLowerCase().replace(/[^0-9a-f]/g, "");
 const fail = (res, status, message) => res.status(status).json({ error: message });
 const importKey = (publicKey) => webcrypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+const validSubscription = (s) => s && typeof s.endpoint === "string" && s.endpoint.startsWith("https://") &&
+  s.endpoint.length < 2000 && s.keys && typeof s.keys.p256dh === "string" && typeof s.keys.auth === "string";
+const validBox = (b) => b && typeof b.iv === "string" && b.iv.length < 200 &&
+  typeof b.data === "string" && b.data.length > 0 && b.data.length <= 4000000;
 
 export function createCloudApp({
   url = process.env.REDIS_URL || process.env.KV_URL,
@@ -32,7 +38,7 @@ export function createCloudApp({
     if (req.headers.origin && !allowedOrigin(req)) return fail(res, 403, "来源不允许");
     next();
   });
-  app.use(express.json({ limit: "24kb" }));
+  app.use(express.json({ limit: "4mb" }));
   app.use("/api", async (req, res, next) => {
     await store.ready();
     // Vercel overwrites this header at its edge. Never trust it on the local server.
@@ -140,7 +146,40 @@ export function createCloudApp({
       iceServers.push({ urls: process.env.TURN_URL.split(","), username,
         credential: createHmac("sha1", process.env.TURN_SECRET).update(username).digest("base64") });
     }
-    res.json({ iceServers, relayConfigured });
+    res.json({ iceServers, relayConfigured, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || "" });
+  });
+  const notifyDevice = async (id, payload) => {
+    const subscription = await store.pushGet(id);
+    if (!subscription) return;
+    if (!(await sendPush(subscription, payload))) await store.pushDel(id);
+  };
+  app.post("/api/push/subscribe", async (req, res) => {
+    if (!validSubscription(req.body?.subscription)) return fail(res, 400, "订阅数据无效");
+    await store.pushSet(req.deviceId, req.body.subscription);
+    res.json({ ok: true });
+  });
+  app.delete("/api/push/subscribe", async (req, res) => {
+    await store.pushDel(req.deviceId);
+    res.json({ ok: true });
+  });
+  app.post("/api/mailbox", async (req, res) => {
+    if (await store.limited("mailbox:" + req.deviceId, 120)) return fail(res, 429, "发送太频繁，请稍后再试");
+    const to = normalizeId(req.body?.to);
+    if (!validId(to) || !validBox(req.body?.box)) return fail(res, 400, "消息无效");
+    if (!(await store.related(req.deviceId, to))) return fail(res, 403, "只能发送给好友");
+    const envelope = { id: randomUUID(), from: req.deviceId, to, box: req.body.box, time: Date.now() };
+    await store.mailboxPush(to, envelope);
+    await notifyDevice(to, { title: "INOU", body: "你收到一条新消息", data: { peer: req.deviceId } });
+    res.json({ ok: true, id: envelope.id });
+  });
+  app.get("/api/mailbox", async (req, res) => {
+    const items = await store.mailboxList(req.deviceId);
+    res.json({ items: items.map(({ id, from, box }) => ({ id, from, box })) });
+  });
+  app.post("/api/mailbox/ack", async (req, res) => {
+    const count = Math.max(0, Math.min(200, Number(req.body?.count) || 0));
+    if (count) await store.mailboxTake(req.deviceId, count);
+    res.json({ ok: true });
   });
   server.on("upgrade", (req, socket, head) => {
     if (req.url?.split("?")[0] !== "/signal" || !allowedOrigin(req)) return socket.destroy();

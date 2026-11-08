@@ -5,7 +5,16 @@ import {
   digest,
   from64,
   validMessage,
+  sealMailbox,
+  openMailbox,
 } from "./vault";
+
+const urlBase64ToUint8Array = (base64) => {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+
 export class ChatEngine {
   constructor(vault, onChange, onError) {
     this.vault = vault;
@@ -20,6 +29,7 @@ export class ChatEngine {
     this.token = null;
     this.iceServers = [];
     this.relayConfigured = false;
+    this.vapidPublicKey = "";
     this.receiveQueue = Promise.resolve();
     this.syncQueue = Promise.resolve();
     this.retrying = false;
@@ -47,6 +57,11 @@ export class ChatEngine {
     this.key = await signingKey(this.state.identity);
     this.running = true;
     await this.connect();
+    this.swMessage = (e) => {
+      if (e.data?.type === "inou-push") this.fetchMailbox().catch(() => {});
+    };
+    navigator.serviceWorker?.addEventListener("message", this.swMessage);
+    this.fetchMailbox().catch(() => {});
     this.timer = setInterval(() => this.tick(), 5000);
     this.network = () => this.tick();
     window.addEventListener("online", this.network);
@@ -73,6 +88,7 @@ export class ChatEngine {
       const ice = await this.api("ice");
       this.iceServers = ice.iceServers;
       this.relayConfigured = ice.relayConfigured;
+      this.vapidPublicKey = ice.vapidPublicKey || "";
       const ws = new WebSocket(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/signal`,
       );
@@ -359,6 +375,7 @@ export class ChatEngine {
         throw Error("本机存储失败，消息尚未确认送达");
       }
       this.emit();
+      this.notifyHidden(id, message);
     }
     if (p.channel?.readyState === "open")
       p.channel.send(JSON.stringify({ type: "ack", id: m.id }));
@@ -388,6 +405,7 @@ export class ChatEngine {
     }
     this.emit();
     this.flush(peer).catch(() => {});
+    if (!this.online.has(peer)) this.postMailbox(peer, m).catch(() => {});
     return m;
   }
   async flush(id) {
@@ -440,6 +458,102 @@ export class ChatEngine {
       }
     } finally {
       p.sending = false;
+    }
+  }
+  async postMailbox(peer, m) {
+    const c = this.state.contacts.find((x) => x.id === peer && x.active);
+    if (!c?.publicKey || !this.token) return;
+    const box = await sealMailbox(this.state.identity, c.publicKey, {
+      id: m.id,
+      body: m.body,
+      kind: m.kind,
+      time: m.time,
+      from: this.state.identity.id,
+    });
+    await this.api("mailbox", "POST", { to: peer, box });
+  }
+  async fetchMailbox() {
+    if (!this.running || !this.token) return;
+    let d;
+    try {
+      d = await this.api("mailbox");
+    } catch {
+      return;
+    }
+    const items = d?.items;
+    if (!Array.isArray(items) || !items.length) return;
+    for (const item of items) {
+      const c = this.state.contacts.find((x) => x.id === item.from && x.active);
+      if (!c?.publicKey) continue;
+      try {
+        const msg = await openMailbox(this.state.identity, c.publicKey, item.box);
+        if (!validMessage(msg) || msg.from !== item.from) continue;
+        const seen = item.from + ":" + msg.id;
+        if (!this.state.seen.includes(seen)) {
+          this.state.messages.push({
+            ...msg,
+            peer: item.from,
+            sender: item.from,
+            status: "received",
+          });
+          this.state.seen.push(seen);
+          await this.vault.save();
+        }
+      } catch {
+        // 解密失败的消息按丢弃处理，不再重试。
+      }
+    }
+    this.api("mailbox/ack", "POST", { count: items.length }).catch(() => {});
+    this.emit();
+  }
+  async pushPermission() {
+    if (!("Notification" in window)) return "unsupported";
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
+    if (!this.vapidPublicKey) return "unavailable";
+    return Notification.permission;
+  }
+  async subscribePush() {
+    if (!this.vapidPublicKey || !("serviceWorker" in navigator) || !("PushManager" in window))
+      throw Error("当前环境不支持消息通知");
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") throw Error("未获得通知权限，请在系统设置中允许");
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub)
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(this.vapidPublicKey),
+      });
+    await this.api("push/subscribe", "POST", { subscription: sub.toJSON() });
+  }
+  async unsubscribePush() {
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      const sub = await reg?.pushManager?.getSubscription();
+      await sub?.unsubscribe();
+    } catch {
+      // 忽略取消订阅失败。
+    }
+    await this.api("push/subscribe", "DELETE").catch(() => {});
+  }
+  async notifyHidden(peer, m) {
+    if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted")
+      return;
+    const c = this.state.contacts.find((x) => x.id === peer);
+    const body = m.kind === "image" ? "[图片]" : String(m.body || "").slice(0, 120);
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      if (reg)
+        await reg.showNotification(c?.name || "INOU", {
+          body,
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
+          tag: "inou-" + peer,
+          data: { peer },
+        });
+      else new Notification(c?.name || "INOU", { body });
+    } catch {
+      // 通知展示失败不影响消息接收。
     }
   }
   async tick() {
@@ -519,6 +633,7 @@ export class ChatEngine {
     this.running = false;
     clearInterval(this.timer);
     window.removeEventListener("online", this.network);
+    navigator.serviceWorker?.removeEventListener("message", this.swMessage);
     this.ws?.close();
     for (const id of [...this.peers.keys()]) this.drop(id);
     this.token = null;

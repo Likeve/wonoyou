@@ -5,7 +5,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
       registerType: "prompt",
+      injectRegister: null,
       includeAssets: ["icon.svg", "apple-touch-icon.png"],
       manifest: {
         id: "/",
@@ -28,8 +32,7 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
-        navigateFallbackDenylist: [/^\/api/, /^\/signal/],
+      injectManifest: {
         globPatterns: ["**/*.{js,css,html,png,svg,woff2}"],
         maximumFileSizeToCacheInBytes: 3000000,
       },

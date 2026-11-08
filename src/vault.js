@@ -210,6 +210,64 @@ export async function verify(publicKey, text, signature) {
     return false;
   }
 }
+
+// 用双方已有的 P-256 身份密钥做 ECDH，派生出 AES-GCM 会话密钥。
+// 身份密钥是 ECDSA；ECDSA 与 ECDH 同曲线，可导出 JWK 后按 ECDH 复用，
+// 这样无需迁移旧数据或额外发布第二把公钥。
+async function deriveMailboxKey(privatePkcs8, peerPublicSpki) {
+  const ecdsaPrivate = await crypto.subtle.importKey(
+    "pkcs8",
+    from64(privatePkcs8),
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign"],
+  );
+  const privateJwk = await crypto.subtle.exportKey("jwk", ecdsaPrivate);
+  delete privateJwk.key_ops;
+  delete privateJwk.alg;
+  const ecdhPrivate = await crypto.subtle.importKey(
+    "jwk",
+    privateJwk,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveKey", "deriveBits"],
+  );
+  const ecdsaPublic = await crypto.subtle.importKey(
+    "spki",
+    from64(peerPublicSpki),
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["verify"],
+  );
+  const publicJwk = await crypto.subtle.exportKey("jwk", ecdsaPublic);
+  delete publicJwk.key_ops;
+  delete publicJwk.alg;
+  const ecdhPublic = await crypto.subtle.importKey(
+    "jwk",
+    publicJwk,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    [],
+  );
+  return crypto.subtle.deriveKey(
+    { name: "ECDH", public: ecdhPublic },
+    ecdhPrivate,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+export async function sealMailbox(identity, peerPublicKey, message) {
+  const key = await deriveMailboxKey(identity.privateKey, peerPublicKey);
+  return seal(key, message);
+}
+
+export async function openMailbox(identity, peerPublicKey, box) {
+  const key = await deriveMailboxKey(identity.privateKey, peerPublicKey);
+  return unseal(key, box);
+}
+
 export async function exportArchive(state, password) {
   const salt = random(16);
   return {

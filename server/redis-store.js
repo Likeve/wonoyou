@@ -100,6 +100,30 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       checkTransaction(await tx.exec());
     },
     async unblock(id, peer) { await redis.srem(key("blocks:" + id), peer); },
+    async pushSet(id, subscription) {
+      await redis.set(key("push:" + id), JSON.stringify(subscription), "EX", 2592000);
+    },
+    async pushGet(id) {
+      const raw = await redis.get(key("push:" + id));
+      return raw ? JSON.parse(raw) : null;
+    },
+    async pushDel(id) { await redis.del(key("push:" + id)); },
+    async mailboxPush(to, envelope) {
+      const list = key("mailbox:" + to);
+      await redis.multi().rpush(list, JSON.stringify(envelope))
+        .expire(list, 604800).exec().then(checkTransaction);
+    },
+    async mailboxList(id) {
+      const values = await redis.lrange(key("mailbox:" + id), 0, -1);
+      const out = [];
+      for (const value of values) {
+        try { out.push(JSON.parse(value)); } catch { /* ignore */ }
+      }
+      return out;
+    },
+    async mailboxTake(id, count) {
+      if (count > 0) await redis.ltrim(key("mailbox:" + id), count, -1);
+    },
     async claim(id, lease) { await redis.set(key("presence:" + id), lease, "EX", 75); },
     async owns(id, lease) { return (await redis.get(key("presence:" + id))) === lease; },
     async renew(id, lease) { return !!(await evalScript(`if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('EXPIRE',KEYS[1],75) end; return 0`, ["presence:" + id], [lease])); },

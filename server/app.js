@@ -5,7 +5,13 @@ import { randomBytes, createHash, webcrypto, createHmac } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { sendPush } from "./push.js";
 const hash = (s) => createHash("sha256").update(s).digest("hex");
+const normalizeId = (s) => String(s || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+const validSubscription = (s) => s && typeof s.endpoint === "string" && s.endpoint.startsWith("https://") &&
+  s.endpoint.length < 2000 && s.keys && typeof s.keys.p256dh === "string" && typeof s.keys.auth === "string";
+const validBox = (b) => b && typeof b.iv === "string" && b.iv.length < 200 &&
+  typeof b.data === "string" && b.data.length > 0 && b.data.length <= 4000000;
 const error = (res, status, message) =>
   res.status(status).json({ error: message });
 export function createApp({
@@ -18,7 +24,10 @@ export function createApp({
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, public_key TEXT NOT NULL, name TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS relations(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));
- CREATE TABLE IF NOT EXISTS blocks(owner TEXT NOT NULL,peer TEXT NOT NULL,PRIMARY KEY(owner,peer));`);
+ CREATE TABLE IF NOT EXISTS blocks(owner TEXT NOT NULL,peer TEXT NOT NULL,PRIMARY KEY(owner,peer));
+ CREATE TABLE IF NOT EXISTS mailbox(id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL, created INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS pushes(owner TEXT PRIMARY KEY, payload TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS mailbox_owner ON mailbox(owner);`);
   if (
     !db
       .prepare("SELECT name FROM pragma_table_info('devices') WHERE name='name'")
@@ -46,7 +55,7 @@ export function createApp({
       return error(res, 403, "来源不允许");
     next();
   });
-  app.use(express.json({ limit: "24kb" }));
+  app.use(express.json({ limit: "4mb" }));
   const limited = (key, max = 60) => {
     const now = Date.now();
     let v = limits.get(key);
@@ -230,7 +239,75 @@ export function createApp({
           .digest("base64"),
       });
     }
-    res.json({ iceServers, relayConfigured: !!process.env.TURN_SECRET });
+    res.json({
+      iceServers,
+      relayConfigured: !!process.env.TURN_SECRET,
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY || "",
+    });
+  });
+  const notifyDevice = async (id, payload) => {
+    const row = db.prepare("SELECT payload FROM pushes WHERE owner=?").get(id);
+    if (!row) return;
+    let subscription;
+    try { subscription = JSON.parse(row.payload); } catch { return; }
+    if (!(await sendPush(subscription, payload)))
+      db.prepare("DELETE FROM pushes WHERE owner=?").run(id);
+  };
+  app.post("/api/push/subscribe", (req, res) => {
+    if (!validSubscription(req.body.subscription))
+      return error(res, 400, "订阅数据无效");
+    db.prepare(
+      "INSERT INTO pushes(owner, payload) VALUES(?,?) ON CONFLICT(owner) DO UPDATE SET payload=excluded.payload",
+    ).run(req.deviceId, JSON.stringify(req.body.subscription));
+    res.json({ ok: true });
+  });
+  app.delete("/api/push/subscribe", (req, res) => {
+    db.prepare("DELETE FROM pushes WHERE owner=?").run(req.deviceId);
+    res.json({ ok: true });
+  });
+  app.post("/api/mailbox", async (req, res) => {
+    if (limited("mailbox:" + req.deviceId, 120))
+      return error(res, 429, "发送太频繁，请稍后再试");
+    const to = normalizeId(req.body.to);
+    if (!/^[0-9a-f]{64}$/.test(to) || !validBox(req.body.box))
+      return error(res, 400, "消息无效");
+    if (!related(req.deviceId, to)) return error(res, 403, "只能发送给好友");
+    const envelope = {
+      id: randomBytes(16).toString("hex"),
+      from: req.deviceId,
+      to,
+      box: req.body.box,
+      time: Date.now(),
+    };
+    db.prepare("INSERT INTO mailbox(id, owner, payload, created) VALUES(?,?,?,?)").run(
+      envelope.id,
+      to,
+      JSON.stringify(envelope),
+      envelope.time,
+    );
+    await notifyDevice(to, { title: "INOU", body: "你收到一条新消息", data: { peer: req.deviceId } });
+    res.json({ ok: true, id: envelope.id });
+  });
+  app.get("/api/mailbox", (req, res) => {
+    const rows = db
+      .prepare("SELECT payload FROM mailbox WHERE owner=? ORDER BY created LIMIT 200")
+      .all(req.deviceId);
+    const items = [];
+    for (const row of rows) {
+      try {
+        const e = JSON.parse(row.payload);
+        items.push({ id: e.id, from: e.from, box: e.box });
+      } catch { /* ignore */ }
+    }
+    res.json({ items });
+  });
+  app.post("/api/mailbox/ack", (req, res) => {
+    const count = Math.max(0, Math.min(200, Number(req.body?.count) || 0));
+    if (count)
+      db.prepare(
+        "DELETE FROM mailbox WHERE owner=? AND id IN (SELECT id FROM mailbox WHERE owner=? ORDER BY created LIMIT ?)",
+      ).run(req.deviceId, req.deviceId, count);
+    res.json({ ok: true });
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 24000 });
   server.on("upgrade", (req, socket, head) => {

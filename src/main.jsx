@@ -28,6 +28,7 @@ import {
   LogOut,
   Smartphone,
   Link2,
+  Bell,
   RefreshCw,
   ShieldBan,
   LoaderCircle,
@@ -261,6 +262,7 @@ function App() {
     [preview, setPreview] = useState(null),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
+    [notif, setNotif] = useState(""),
     [emoji, setEmoji] = useState(false);
   const engine = useRef(null),
     bottom = useRef(null),
@@ -377,6 +379,30 @@ function App() {
     }
     render((n) => n + 1);
   };
+  useEffect(() => {
+    if (!vault) return;
+    engine.current?.pushPermission().then(setNotif).catch(() => setNotif("unsupported"));
+  }, [vault, version]);
+  useEffect(() => {
+    if (!vault) return;
+    const peer = new URLSearchParams(location.search).get("peer");
+    if (peer && state.contacts.some((c) => c.id === peer)) {
+      choose(peer);
+      history.replaceState(null, "", location.pathname);
+    }
+  }, [vault, version]);
+  const toggleNotifications = () =>
+    run(async () => {
+      if (notif === "granted") {
+        await engine.current.unsubscribePush();
+        setNotif("default");
+        flash("已关闭消息通知");
+      } else {
+        await engine.current.subscribePush();
+        setNotif("granted");
+        flash("消息通知已开启");
+      }
+    });
   const openModal = (m) => {
     setError("");
     setScanning(false);
@@ -708,6 +734,26 @@ function App() {
               </button>
               <button
                 className="settings-row"
+                onClick={toggleNotifications}
+                disabled={notif === "unsupported" || notif === "unavailable" || notif === "denied"}
+              >
+                <Bell />
+                <span>
+                  消息通知 ·{" "}
+                  {notif === "granted"
+                    ? "已开启"
+                    : notif === "denied"
+                      ? "已被系统拒绝"
+                      : notif === "unsupported"
+                        ? "环境不支持"
+                        : notif === "unavailable"
+                          ? "服务未配置"
+                          : "未开启"}
+                </span>
+                <ChevronRight />
+              </button>
+              <button
+                className="settings-row"
                 onClick={() => openModal("blocked")}
               >
                 <ShieldBan />
@@ -725,7 +771,9 @@ function App() {
               <div className="profile-info">
                 <ShieldCheck size={19} />
                 <h4>你的记录，你来保管</h4>
-                <p>没有云端消息箱。双方打开应用后，待发消息才能送达。</p>
+                <p>
+                  对方不在线时，消息会加密暂存并提醒对方；内容始终端到端加密。
+                </p>
                 <small>开发预览 0.1</small>
               </div>
             </div>
