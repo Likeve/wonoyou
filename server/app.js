@@ -178,14 +178,22 @@ export function createApp({
   app.get("/api/identity/:id", (req, res) => {
     if (limited("lookup:" + req.deviceId, 60))
       return error(res, 429, "尝试过多，请稍后再试");
-    const id = String(req.params.id || "")
+    const q = String(req.params.id || "")
       .toLowerCase()
       .replace(/[^0-9a-f]/g, "");
-    if (!/^[0-9a-f]{64}$/.test(id))
-      return error(res, 400, "身份码格式不正确");
-    const d = db.prepare("SELECT id, name FROM devices WHERE id=?").get(id);
-    if (!d) return error(res, 400, "找不到该身份码，请确认对方已上线");
-    res.json({ id: d.id, name: d.name || "" });
+    if (!/^[0-9a-f]{6,64}$/.test(q))
+      return error(res, 400, "请输入至少 6 位身份码");
+    const rows =
+      q.length === 64
+        ? db.prepare("SELECT id, name FROM devices WHERE id=?").all(q)
+        : db
+            .prepare("SELECT id, name FROM devices WHERE id LIKE ? LIMIT 2")
+            .all(q + "%");
+    if (!rows.length)
+      return error(res, 400, "找不到该身份码，请确认对方已上线");
+    if (rows.length > 1)
+      return error(res, 400, "前 " + q.length + " 位对应多个用户，请再多输入几位");
+    res.json({ id: rows[0].id, name: rows[0].name || "" });
   });
   app.post("/api/contacts", (req, res) => {
     if (limited("add:" + req.deviceId, 10))

@@ -468,7 +468,7 @@ function App() {
   const lookupContact = (value) =>
     run(async () => {
       const id = normalizeId(value);
-      if (!/^[0-9a-f]{64}$/.test(id)) throw Error("身份码格式不正确");
+      if (!/^[0-9a-f]{6,64}$/.test(id)) throw Error("请输入至少 6 位身份码");
       const d = await engine.current.api("identity/" + id);
       stopScan();
       setPreview(d);
@@ -1544,7 +1544,7 @@ function App() {
                 ) : (
                   <>
                     <h2>添加一位新朋友</h2>
-                    <p>扫描对方二维码，或输入身份码，先查看对方信息。</p>
+                    <p>扫描对方二维码，或输入对方身份码（前 6 位即可），先查看对方信息。</p>
                     <button
                       className="primary full"
                       onClick={startScan}
@@ -1563,7 +1563,7 @@ function App() {
                         <input
                           name="id"
                           className="code-input"
-                          placeholder="INOU-XXXX-XXXX-XXXX-…"
+                          placeholder="前 6 位即可，如 A1B2C3"
                           required
                           autoCapitalize="characters"
                           autoComplete="off"

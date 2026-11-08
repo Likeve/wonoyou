@@ -146,11 +146,17 @@ export function createCloudApp({
   }));
   app.get("/api/identity/:id", async (req, res) => {
     if (await store.limited("lookup:" + req.deviceId, 60)) return fail(res, 429, "尝试过多，请稍后再试");
-    const id = String(req.params.id || "").toLowerCase().replace(/[^0-9a-f]/g, "");
-    if (!/^[0-9a-f]{64}$/.test(id)) return fail(res, 400, "身份码格式不正确");
-    const info = await store.device(id);
-    if (!info) return fail(res, 400, "找不到该身份码，请确认对方已上线");
-    res.json({ id, name: info.name || "" });
+    const q = String(req.params.id || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (!/^[0-9a-f]{6,64}$/.test(q)) return fail(res, 400, "请输入至少 6 位身份码");
+    if (q.length === 64) {
+      const info = await store.device(q);
+      if (!info) return fail(res, 400, "找不到该身份码，请确认对方已上线");
+      return res.json({ id: q, name: info.name || "" });
+    }
+    const matches = await store.deviceByPrefix(q);
+    if (!matches.length) return fail(res, 400, "找不到该身份码，请确认对方已上线");
+    if (matches.length > 1) return fail(res, 400, "前 " + q.length + " 位对应多个用户，请再多输入几位");
+    res.json({ id: matches[0].id, name: matches[0].name || "" });
   });
   app.post("/api/contacts", async (req, res) => {
     if (await store.limited("add:" + req.deviceId, 10)) return fail(res, 429, "尝试过多，请稍后再试");
