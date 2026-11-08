@@ -1563,6 +1563,13 @@ input::placeholder {
   height: 100%;
   object-fit: cover;
 }
+.scanner-canvas {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .scanner-status {
   position: absolute;
   inset: 0;

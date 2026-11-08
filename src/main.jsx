@@ -136,14 +136,23 @@ function Scanner({ onResult, onCancel, stream }) {
     let stopped = false;
     const stopStream = () => stream.getTracks().forEach((t) => t.stop());
     const video = videoRef.current;
-    video.srcObject = stream;
     video.muted = true;
+    video.defaultMuted = true;
     video.playsInline = true;
-    video.setAttribute("playsinline", "true");
-    video.setAttribute("autoplay", "true");
+    video.setAttribute("playsinline", "");
+    video.setAttribute("muted", "");
+    video.setAttribute("autoplay", "");
+    video.srcObject = stream;
     // Best-effort play. iOS Safari can reject the play() promise if the frame
     // isn't ready yet; the RAF loop below waits for readyState.
-    video.play().catch(() => {});
+    const ensurePlay = () => {
+      if (stopped) return;
+      const p = video.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    };
+    video.addEventListener("loadedmetadata", ensurePlay, { once: true });
+    video.addEventListener("canplay", ensurePlay, { once: true });
+    ensurePlay();
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const tick = () => {
@@ -182,6 +191,7 @@ function Scanner({ onResult, onCancel, stream }) {
     <div className="scanner">
       <div className="scanner-view">
         <video ref={videoRef} muted playsInline />
+        <canvas ref={canvasRef} className="scanner-canvas" aria-hidden="true" />
         <i className="scanner-frame" />
       </div>
       <p className="muted center scan-hint">将对方二维码放入框内，识别后自动添加。</p>
