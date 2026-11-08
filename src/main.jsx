@@ -241,6 +241,7 @@ function App() {
     [emoji, setEmoji] = useState(false);
   const engine = useRef(null),
     scanActive = useRef(false),
+    userIdRef = useRef(""),
     bottom = useRef(null),
     scroll = useRef(null),
     fileInput = useRef(null),
@@ -271,12 +272,14 @@ function App() {
       setBusy(false);
     }
   };
-  const enterApp = async () => {
+  const vaultKeyFor = (uid) => (uid ? "vault:" + uid : "vault");
+  const enterApp = async (uid = "") => {
     setError("");
     setBootNeedsReset(false);
-    if (await hasVault()) {
+    const storageKey = vaultKeyFor(uid);
+    if (await hasVault(storageKey)) {
       try {
-        await start(await loadVault());
+        await start(await loadVault(storageKey));
       } catch (e) {
         if (/版本过旧|已损坏/.test(e.message)) setBootNeedsReset(true);
         throw e;
@@ -294,9 +297,10 @@ function App() {
           return;
         }
         setUserEmail(session.user?.email || "");
+        userIdRef.current = session.user?.id || "";
       }
       setAuth("signedIn");
-      await enterApp();
+      await enterApp(userIdRef.current);
     } catch (e) {
       setError(e.message || "无法使用本地存储");
       setReady("error");
@@ -516,7 +520,8 @@ function App() {
     (async () => {
       try {
         if (authMode === "login") {
-          await signIn(email, password);
+          const r = await signIn(email, password);
+          userIdRef.current = r.user?.id || "";
         } else {
           const r = await signUp(email, password);
           if (!r.session) {
@@ -524,10 +529,11 @@ function App() {
             setAuthMode("login");
             return;
           }
+          userIdRef.current = r.user?.id || "";
         }
         setAuth("signedIn");
         setUserEmail(String(email || "").trim());
-        await enterApp();
+        await enterApp(userIdRef.current);
       } catch (e) {
         setAuthError(readableAuthError(e));
       } finally {
@@ -542,6 +548,7 @@ function App() {
       engine.current = null;
       release.current?.();
       release.current = null;
+      userIdRef.current = "";
       setVault(null);
       setSelected(null);
       setView("chats");
@@ -552,7 +559,12 @@ function App() {
     e.preventDefault();
     const data = new FormData(e.target);
     run(async () => {
-      await start(await createVault(data.get("name").trim() || "我"));
+      await start(
+        await createVault(
+          data.get("name").trim() || "我",
+          vaultKeyFor(userIdRef.current),
+        ),
+      );
     });
   };
   if (auth === "signedOut")
@@ -681,7 +693,7 @@ function App() {
                     className="text-btn full danger"
                     onClick={() =>
                       run(async () => {
-                        await deleteVault();
+                        await deleteVault(vaultKeyFor(userIdRef.current));
                         setError("");
                         setReady("create");
                       })

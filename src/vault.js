@@ -61,7 +61,7 @@ const dbPromise = () =>
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
-async function record(value) {
+async function record(value, storageKey = "vault") {
   const db = await dbPromise();
   try {
     return await new Promise((resolve, reject) => {
@@ -71,7 +71,9 @@ async function record(value) {
         ),
         store = tx.objectStore("secure");
       const r =
-        value === undefined ? store.get("vault") : store.put(value, "vault");
+        value === undefined
+          ? store.get(storageKey)
+          : store.put(value, storageKey);
       tx.oncomplete = () => resolve(r.result);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || Error("存储失败"));
@@ -80,14 +82,14 @@ async function record(value) {
     db.close();
   }
 }
-export const hasVault = async () => !!(await record());
-export async function deleteVault() {
+export const hasVault = async (storageKey = "vault") => !!(await record(undefined, storageKey));
+export async function deleteVault(storageKey = "vault") {
   const db = await dbPromise();
   try {
     await new Promise((resolve, reject) => {
       const tx = db.transaction("secure", "readwrite"),
         store = tx.objectStore("secure");
-      store.delete("vault");
+      store.delete(storageKey);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || Error("清除失败"));
@@ -96,8 +98,8 @@ export async function deleteVault() {
     db.close();
   }
 }
-export async function createVault(name) {
-  if (await hasVault()) throw Error("这台设备已有资料");
+export async function createVault(name, storageKey = "vault") {
+  if (await hasVault(storageKey)) throw Error("这台设备已有资料");
   const pair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
@@ -128,12 +130,12 @@ export async function createVault(name) {
     blocked: [],
     lastBackup: null,
   };
-  const vault = makeVault(key, header, state);
+  const vault = makeVault(storageKey, key, header, state);
   await vault.save();
   return vault;
 }
-export async function loadVault() {
-  const r = await record();
+export async function loadVault(storageKey = "vault") {
+  const r = await record(undefined, storageKey);
   if (!r) throw Error("没有本地资料");
   if (r.version !== 2 || typeof r.key !== "string")
     throw Error("本地资料版本过旧，请重新创建身份");
@@ -146,6 +148,7 @@ export async function loadVault() {
       ["encrypt", "decrypt"],
     );
     return makeVault(
+      storageKey,
       key,
       { version: r.version, key: r.key },
       await unseal(key, r.box),
@@ -154,7 +157,7 @@ export async function loadVault() {
     throw Error("本地资料已损坏，请重新创建身份");
   }
 }
-function makeVault(key, header, state) {
+function makeVault(storageKey, key, header, state) {
   let queue = Promise.resolve();
   return {
     state,
@@ -163,7 +166,7 @@ function makeVault(key, header, state) {
       const job = queue
         .catch(() => {})
         .then(async () =>
-          record({ ...header, box: await seal(key, snapshot) }),
+          record({ ...header, box: await seal(key, snapshot) }, storageKey),
         );
       queue = job;
       return job;
