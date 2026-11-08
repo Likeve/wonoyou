@@ -124,133 +124,70 @@ function IdentityQR({ value }) {
   );
 }
 
-function Scanner({ onResult, onCancel }) {
+function Scanner({ onResult, onCancel, stream }) {
   const videoRef = useRef(null),
     canvasRef = useRef(null),
-    streamRef = useRef(null),
     rafRef = useRef(0),
     doneRef = useRef(false),
     onResultRef = useRef(onResult);
   onResultRef.current = onResult;
-  const [error, setError] = useState("");
-  const [starting, setStarting] = useState(true);
   useEffect(() => {
+    if (!stream) return;
     let stopped = false;
-    const stopStream = () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    };
-    (async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          setError("当前环境不支持摄像头扫码，请改用输入身份码。");
-          setStarting(false);
-          return;
-        }
-        const attempts = [
-          { video: { facingMode: { ideal: "environment" } }, audio: false },
-          { video: true, audio: false },
-        ];
-        let stream,
-          lastError;
-        for (const constraints of attempts) {
-          try {
-            stream = await navigator.mediaDevices.getUserMedia(constraints);
-            break;
-          } catch (e) {
-            lastError = e;
-            if (e?.name === "NotAllowedError" || e?.name === "SecurityError")
-              throw e;
+    const stopStream = () => stream.getTracks().forEach((t) => t.stop());
+    const video = videoRef.current;
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute("playsinline", "true");
+    video.setAttribute("autoplay", "true");
+    // Best-effort play. iOS Safari can reject the play() promise if the frame
+    // isn't ready yet; the RAF loop below waits for readyState.
+    video.play().catch(() => {});
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const tick = () => {
+      if (stopped || doneRef.current) return;
+      if (video.readyState >= video.HAVE_ENOUGH_DATA) {
+        const vw = video.videoWidth,
+          vh = video.videoHeight;
+        if (vw && vh) {
+          const scale = Math.min(1, 720 / Math.max(vw, vh)),
+            w = Math.max(1, Math.round(vw * scale)),
+            h = Math.max(1, Math.round(vh * scale));
+          canvas.width = w;
+          canvas.height = h;
+          ctx.drawImage(video, 0, 0, w, h);
+          const img = ctx.getImageData(0, 0, w, h);
+          const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+          if (code?.data) {
+            doneRef.current = true;
+            stopStream();
+            onResultRef.current(code.data);
+            return;
           }
-        }
-        if (!stream) throw lastError || Error("无法获取摄像头");
-        if (stopped) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        const video = videoRef.current;
-        video.srcObject = stream;
-        video.muted = true;
-        video.playsInline = true;
-        video.setAttribute("playsinline", "true");
-        video.setAttribute("autoplay", "true");
-        // Best-effort play. iOS Safari can reject the play() promise if the
-        // frame isn't ready yet; the RAF loop below waits for readyState, so a
-        // rejection here must not abort the scanner.
-        video.play().catch(() => {});
-        setStarting(false);
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        const tick = () => {
-          if (stopped || doneRef.current) return;
-          if (video.readyState >= video.HAVE_ENOUGH_DATA) {
-            const vw = video.videoWidth,
-              vh = video.videoHeight;
-            if (vw && vh) {
-              // Downscale large camera frames so jsQR stays responsive on phones.
-              const scale = Math.min(1, 720 / Math.max(vw, vh)),
-                w = Math.max(1, Math.round(vw * scale)),
-                h = Math.max(1, Math.round(vh * scale));
-              canvas.width = w;
-              canvas.height = h;
-              ctx.drawImage(video, 0, 0, w, h);
-              const img = ctx.getImageData(0, 0, w, h);
-              const code = jsQR(img.data, w, h, {
-                inversionAttempts: "dontInvert",
-              });
-              if (code?.data) {
-                doneRef.current = true;
-                stopStream();
-                onResultRef.current(code.data);
-                return;
-              }
-            }
-          }
-          rafRef.current = requestAnimationFrame(tick);
-        };
-        rafRef.current = requestAnimationFrame(tick);
-      } catch (e) {
-        console.error("INOU scanner error:", e);
-        if (!stopped) {
-          setError(cameraError(e));
-          setStarting(false);
-          stopStream();
         }
       }
-    })();
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
     return () => {
       stopped = true;
       doneRef.current = true;
       cancelAnimationFrame(rafRef.current);
       stopStream();
     };
-  }, []);
+  }, [stream]);
   return (
     <div className="scanner">
       <div className="scanner-view">
         <video ref={videoRef} muted playsInline />
-        {starting && (
-          <div className="scanner-status">
-            <LoaderCircle size={20} className="spin" /> 正在打开摄像头…
-          </div>
-        )}
-        {!starting && !error && <i className="scanner-frame" />}
+        <i className="scanner-frame" />
       </div>
-      {error ? (
-        <div className="scan-error">
-          <CameraOff size={17} /> {error}
-        </div>
-      ) : (
-        <p className="muted center scan-hint">
-          将对方二维码放入框内，识别后自动添加。
-        </p>
-      )}
+      <p className="muted center scan-hint">将对方二维码放入框内，识别后自动添加。</p>
       <button
         className="text-btn full"
-        onClick={() => {
-          onCancel();
-        }}
+        onClick={onCancel}
       >
         返回手动输入
       </button>
@@ -272,12 +209,15 @@ function App() {
     [search, setSearch] = useState(""),
     [draft, setDraft] = useState(""),
     [scanning, setScanning] = useState(false),
+    [scanStream, setScanStream] = useState(null),
+    [scanError, setScanError] = useState(""),
     [preview, setPreview] = useState(null),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
     [notif, setNotif] = useState(""),
     [emoji, setEmoji] = useState(false);
   const engine = useRef(null),
+    scanActive = useRef(false),
     bottom = useRef(null),
     scroll = useRef(null),
     fileInput = useRef(null),
@@ -429,16 +369,56 @@ function App() {
     });
   const openModal = (m) => {
     setError("");
-    setScanning(false);
+    stopScan();
     setPreview(null);
     setModal(m);
+  };
+  const stopScan = () => {
+    scanActive.current = false;
+    setScanning(false);
+    setScanStream(null);
+    setScanError("");
+  };
+  const startScan = () => {
+    scanActive.current = true;
+    setScanning(true);
+    setScanError("");
+    setScanStream(null);
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setScanError("当前环境不支持摄像头扫码，请改用输入身份码。");
+        return;
+      }
+      const attempts = [
+        { video: { facingMode: { ideal: "environment" } }, audio: false },
+        { video: true, audio: false },
+      ];
+      let lastError;
+      for (const constraints of attempts) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (!scanActive.current) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          setScanStream(stream);
+          return;
+        } catch (e) {
+          lastError = e;
+          if (e?.name === "NotAllowedError" || e?.name === "SecurityError")
+            break;
+        }
+      }
+      if (scanActive.current)
+        setScanError(cameraError(lastError || Error("无法获取摄像头")));
+    })();
   };
   const lookupContact = (value) =>
     run(async () => {
       const id = normalizeId(value);
       if (!/^[0-9a-f]{64}$/.test(id)) throw Error("身份码格式不正确");
       const d = await engine.current.api("identity/" + id);
-      setScanning(false);
+      stopScan();
       setPreview(d);
     });
   const confirmAdd = () =>
@@ -1222,10 +1202,26 @@ function App() {
                 ) : scanning ? (
                   <>
                     <h2>扫描二维码</h2>
-                    <Scanner
-                      onResult={lookupContact}
-                      onCancel={() => setScanning(false)}
-                    />
+                    {scanError ? (
+                      <>
+                        <div className="scan-error">
+                          <CameraOff size={17} /> {scanError}
+                        </div>
+                        <button className="text-btn full" onClick={stopScan}>
+                          返回手动输入
+                        </button>
+                      </>
+                    ) : scanStream ? (
+                      <Scanner
+                        stream={scanStream}
+                        onResult={lookupContact}
+                        onCancel={stopScan}
+                      />
+                    ) : (
+                      <div className="scanner-status">
+                        <LoaderCircle size={20} className="spin" /> 正在打开摄像头…
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1233,7 +1229,7 @@ function App() {
                     <p>扫描对方二维码，或输入身份码，先查看对方信息。</p>
                     <button
                       className="primary full"
-                      onClick={() => setScanning(true)}
+                      onClick={startScan}
                     >
                       <ScanLine size={17} /> 扫描二维码
                     </button>
