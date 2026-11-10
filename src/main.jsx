@@ -1024,17 +1024,6 @@ function App() {
                 <h2>{state.identity.name}</h2>
                 <span>本地身份 · {state.identity.id.slice(0, 8)}</span>
               </div>
-              {hasSupabase() && (
-                <div className="account-card">
-                  <div className="account-copy">
-                    <strong>当前账号</strong>
-                    <span>{accountName || "已登录"}</span>
-                  </div>
-                  <button className="danger-btn" onClick={logout}>
-                    <LogOut size={15} /> 退出登录
-                  </button>
-                </div>
-              )}
               <button
                 className="settings-row"
                 onClick={() => openModal("identity")}
@@ -1087,6 +1076,13 @@ function App() {
                 <span>安装到主屏幕</span>
                 <ChevronRight />
               </button>
+              {hasSupabase() && (
+                <button className="settings-row danger" onClick={logout}>
+                  <LogOut />
+                  <span>退出登录</span>
+                  <ChevronRight />
+                </button>
+              )}
               <div className="profile-info">
                 <ShieldCheck size={19} />
                 <h4>你的记录，你来保管</h4>
