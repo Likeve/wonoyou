@@ -5,6 +5,26 @@ async () => {
   page.on('request', request => {
     if (request.url().endsWith('/api/recover')) requests.push(request.postDataJSON());
   });
+  let passwordLogin;
+  await page.route('https://auth.example.test/auth/v1/token?grant_type=password', async route => {
+    passwordLogin = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': '*' },
+      body: JSON.stringify({
+        access_token: 'test-recovery-access-token',
+        refresh_token: 'test-recovery-refresh-token',
+        expires_in: 3600,
+        token_type: 'bearer',
+        user: {
+          id: 'recovered-isolated-user',
+          email: passwordLogin.email,
+          user_metadata: { username: '旧测试账号' },
+        },
+      }),
+    });
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '已有账号？去登录' }).click();
   await page.getByRole('button', { name: '找回账号 / 重置密码' }).click();
@@ -21,12 +41,15 @@ async () => {
   await page.getByLabel('找回密钥（8 个词，用空格隔开）').fill('山 海 星 月 春 风 秋 雨');
   await page.screenshot({ path: 'output/playwright/recovery-key-only-mobile.png' });
   await page.getByRole('button', { name: '重置密码', exact: true }).click();
-  await page.getByRole('status').filter({ hasText: '密码已重置' }).waitFor();
-  if (await page.locator('input[name="username"]').inputValue() !== '旧测试账号') throw Error('Recovered account not filled');
-  if (await page.getByLabel('密码', { exact: true }).inputValue()) throw Error('Password retained after reset');
+  await page.getByRole('heading', { name: '从一段对话开始' }).waitFor();
+  if (await page.getByRole('heading', { name: '登录 INOU' }).count()) throw Error('Recovery returned to login');
+  if (!passwordLogin || passwordLogin.password !== 'isolated-new-password') throw Error('Recovered account was not signed in');
   if (requests.length !== 2 || requests.some(body => Object.keys(body).sort().join(',') !== 'password,phrase')) throw Error('Recovery request includes unexpected fields');
   await page.screenshot({ path: 'output/playwright/recovery-success-mobile.png' });
   // Check signup saves the recovery hash in the original account-creation request.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole('button', { name: '已有账号？去登录' }).waitFor();
   let signup;
   await page.route('https://auth.example.test/auth/v1/**', async route => {
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' } });
@@ -37,7 +60,6 @@ async () => {
       user: { id: 'new-isolated-user', email: signup.email, user_metadata: signup.data },
     }) });
   });
-  await page.getByRole('button', { name: '没有账号？注册一个' }).click();
   await page.locator('input[name="username"]').fill('新测试账号');
   await page.getByLabel('密码', { exact: true }).fill('isolated-signup-password');
   await page.getByLabel('确认密码', { exact: true }).fill('isolated-signup-password');
@@ -51,5 +73,5 @@ async () => {
   }, 'recovery:新测试账号:' + words.join(' '));
   if (signup?.data?.recovery !== expected) throw Error('Displayed key not saved at signup');
   if (issues.length) throw Error(issues.join('\n'));
-  return { passed: ['no username field', 'no username in request', 'password confirmation', 'incorrect key rejection', 'legacy key reset', 'account autofill', 'password cleared', 'new key saved at signup'], pageErrors: issues };
+  return { passed: ['no username field', 'no username in request', 'password confirmation', 'incorrect key rejection', 'legacy key reset', 'automatic login', 'client entered without login form', 'new key saved at signup'], pageErrors: issues };
 }

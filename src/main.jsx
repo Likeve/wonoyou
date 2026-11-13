@@ -567,9 +567,15 @@ function App() {
           if (password.length < 6) throw Error("新密码至少需要 6 位");
           if (password !== confirm) throw Error("两次输入的新密码不一致");
           const recovered = await requestRecovery(phrase, password);
+          const signedIn = await signIn(recovered.username, password);
+          const uid = signedIn.user?.id || "";
+          if (!uid || !signedIn.session)
+            throw Error("密码已重置，但自动登录未完成，请重试");
+          userIdRef.current = uid;
           setUsername(recovered.username);
-          setAuthNotice("密码已重置，已填入你的账号，请用新密码登录。");
-          setAuthMode("login");
+          setAccountName(recovered.username);
+          setAuth("signedIn");
+          await enterApp(uid);
           return;
         }
         if (password.length < 6) throw Error("密码至少需要 6 位");
