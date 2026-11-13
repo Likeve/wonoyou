@@ -1,6 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createApp } from "../server/app.js";
 import { WebSocket } from "ws";
 let service, base;
@@ -63,6 +64,16 @@ test("authentication required and unknown content APIs are absent", async () => 
       .some((r) => /message|attachment/i.test(r.name)),
     false,
   );
+});
+test("browser security policy permits the configured Supabase account service", async () => {
+  const supabaseOrigin = "https://eqxqouawuwoqecdofoxx.supabase.co";
+  const health = await fetch(base + "/api/health");
+  assert.match(health.headers.get("content-security-policy") || "", new RegExp(supabaseOrigin.replaceAll(".", "\\.")));
+  const config = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
+  const policy = config.headers
+    .flatMap((entry) => entry.headers || [])
+    .find((header) => header.key === "Content-Security-Policy")?.value || "";
+  assert.ok(policy.includes("connect-src 'self' " + supabaseOrigin + " wss:"));
 });
 test("invalid proof and replayed challenge are rejected", async () => {
   const keys = await webcrypto.subtle.generateKey(

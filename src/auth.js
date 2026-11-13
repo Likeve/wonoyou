@@ -72,5 +72,7 @@ export function readableAuthError(error) {
   if (/already registered/i.test(msg)) return "该用户名已被占用，请换一个";
   if (/Password should be at least/i.test(msg)) return "密码至少需要 6 位";
   if (/rate limit/i.test(msg)) return "尝试次数过多，请稍后再试";
+  if (/Failed to fetch|fetch failed|NetworkError/i.test(msg))
+    return "无法连接账号服务，请检查网络后重试";
   return msg || "操作没有完成，请重试";
 }

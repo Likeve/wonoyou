@@ -51,7 +51,7 @@ export function createApp({
       "X-Frame-Options": "DENY",
       "Permissions-Policy": "microphone=(), geolocation=()",
       "Content-Security-Policy":
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://eqxqouawuwoqecdofoxx.supabase.co ws: wss:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     });
     if (req.path.startsWith("/api")) res.set("Cache-Control", "no-store");
     if (origin && req.headers.origin && req.headers.origin !== origin)
