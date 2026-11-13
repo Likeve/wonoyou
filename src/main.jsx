@@ -51,6 +51,10 @@ import {
   readArchive,
   prepareImage,
   digest,
+  prepareRegistrationIdentity,
+  claimRegistrationIdentity,
+  registrationIdentityFor,
+  clearRegistrationIdentity,
 } from "./vault";
 import { ChatEngine } from "./engine";
 import {
@@ -83,12 +87,6 @@ const normalizeId = (s) =>
   String(s || "")
     .toLowerCase()
     .replace(/[^0-9a-f]/g, "");
-const genUsername = () => {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "inou-";
-  for (const b of crypto.getRandomValues(new Uint8Array(6))) s += chars[b % chars.length];
-  return s;
-};
 function Avatar({ name = "", id = "", large = false }) {
   return (
     <div
@@ -230,7 +228,8 @@ function App() {
     [authNotice, setAuthNotice] = useState(""),
     [authBusy, setAuthBusy] = useState(false),
     [accountName, setAccountName] = useState(""),
-    [username, setUsername] = useState(genUsername),
+    [username, setUsername] = useState(""),
+    [registrationIdentity, setRegistrationIdentity] = useState(null),
     [recoveryPhrase, setRecoveryPhrase] = useState(""),
     [ready, setReady] = useState("loading"),
     [bootNeedsReset, setBootNeedsReset] = useState(false),
@@ -261,6 +260,7 @@ function App() {
     fileInput = useRef(null),
     restoreInput = useRef(null),
     release = useRef(null),
+    usernameCustomized = useRef(false),
     nearBottom = useRef(true),
     [newMessage, setNewMessage] = useState(false);
   const state = vault?.state,
@@ -329,6 +329,21 @@ function App() {
       onNeedReload() {},
     });
   }, []);
+  useEffect(() => {
+    if (auth !== "signedOut" || authMode !== "register") return;
+    let active = true;
+    (registrationIdentity
+      ? Promise.resolve(registrationIdentity)
+      : prepareRegistrationIdentity()
+    )
+      .then((identity) => {
+        if (!active) return;
+        setRegistrationIdentity(identity);
+        if (!usernameCustomized.current) setUsername(identity.id.slice(0, 8));
+      })
+      .catch(() => active && setAuthError("无法生成本地身份码，请刷新后重试"));
+    return () => { active = false; };
+  }, [auth, authMode, registrationIdentity]);
   const start = async (v) => {
     if (navigator.locks) {
       let resolveReady;
@@ -585,8 +600,13 @@ function App() {
           const r = await signIn(name, password);
           userIdRef.current = r.user?.id || "";
         } else {
+          if (!registrationIdentity) throw Error("本地身份码尚未生成，请稍后重试");
           const words = generateRecoveryPhrase();
           const r = await signUp(name, password, words.join(" "));
+          if (r.user?.id) {
+            await claimRegistrationIdentity(r.user.id);
+            setRegistrationIdentity(null);
+          }
           if (!r.session) {
             setAuthError(
               "注册未完成：请在 Supabase 的 Authentication → Email 中关闭「Confirm email」，因为本应用不发送邮件。",
@@ -631,18 +651,23 @@ function App() {
       setSelected(null);
       setView("chats");
       setReady("loading");
+      setRegistrationIdentity(null);
+      usernameCustomized.current = false;
+      setUsername("");
       setAuth("signedOut");
     });
   const submitAuth = (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
     run(async () => {
-      await start(
-        await createVault(
-          data.get("name").trim() || "我",
-          vaultKeyFor(userIdRef.current),
-        ),
+      const uid = userIdRef.current;
+      const v = await createVault(
+        data.get("name").trim() || "我",
+        vaultKeyFor(uid),
+        await registrationIdentityFor(uid),
       );
+      await clearRegistrationIdentity(uid).catch(() => {});
+      await start(v);
     });
   };
   if (auth === "signedOut")
@@ -679,22 +704,32 @@ function App() {
                   <input
                     name="username"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => {
+                      if (authMode === "register") usernameCustomized.current = true;
+                      setUsername(e.target.value);
+                    }}
                     required
                     autoComplete="username"
                     placeholder="输入用户名"
                   />
-                  {authMode !== "recover" && (
+                  {authMode === "register" && (
                     <button
                       type="button"
                       className="icon-btn"
-                      aria-label="随机用户名"
-                      onClick={() => setUsername(genUsername())}
+                      aria-label="使用身份码前8位"
+                      disabled={!registrationIdentity}
+                      onClick={() => {
+                        usernameCustomized.current = false;
+                        setUsername(registrationIdentity?.id.slice(0, 8) || "");
+                      }}
                     >
                       <RefreshCw size={15} />
                     </button>
                   )}
                 </span>
+                {authMode === "register" && (
+                  <small className="muted">默认为本地身份码前 8 位，也可以自行修改。</small>
+                )}
               </label>}
               {authMode === "recover" && (
                 <label>
@@ -739,7 +774,10 @@ function App() {
                   {authError}
                 </div>
               )}
-              <button className="primary full" disabled={authBusy}>
+              <button
+                className="primary full"
+                disabled={authBusy || (authMode === "register" && !registrationIdentity)}
+              >
                 {authBusy ? <LoaderCircle className="spin" size={18} /> : null}
                 {authMode === "login"
                   ? "登录"

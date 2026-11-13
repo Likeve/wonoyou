@@ -98,8 +98,7 @@ export async function deleteVault(storageKey = "vault") {
     db.close();
   }
 }
-export async function createVault(name, storageKey = "vault") {
-  if (await hasVault(storageKey)) throw Error("这台设备已有资料");
+async function generateIdentity(name = "") {
   const pair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
@@ -112,6 +111,43 @@ export async function createVault(name, storageKey = "vault") {
     privateKey: to64(await crypto.subtle.exportKey("pkcs8", pair.privateKey)),
     name,
   };
+  return identity;
+}
+
+const registrationIdentityKey = "registration-identity";
+const claimedIdentityKey = (uid) => `${registrationIdentityKey}:${uid}`;
+
+export async function prepareRegistrationIdentity() {
+  const existing = await record(undefined, registrationIdentityKey);
+  if (existing?.id && existing?.publicKey && existing?.privateKey) return existing;
+  const identity = await generateIdentity();
+  await record(identity, registrationIdentityKey);
+  return identity;
+}
+
+export async function claimRegistrationIdentity(uid) {
+  if (!uid) return;
+  const identity = await record(undefined, registrationIdentityKey);
+  if (!identity?.id) return;
+  await record(identity, claimedIdentityKey(uid));
+  await deleteVault(registrationIdentityKey);
+}
+
+export async function registrationIdentityFor(uid) {
+  if (!uid) return null;
+  const identity = await record(undefined, claimedIdentityKey(uid));
+  return identity?.id && identity?.publicKey && identity?.privateKey ? identity : null;
+}
+
+export async function clearRegistrationIdentity(uid) {
+  if (uid) await deleteVault(claimedIdentityKey(uid));
+}
+
+export async function createVault(name, storageKey = "vault", preparedIdentity = null) {
+  if (await hasVault(storageKey)) throw Error("这台设备已有资料");
+  const identity = preparedIdentity
+    ? { ...preparedIdentity, name }
+    : await generateIdentity(name);
   const key = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
