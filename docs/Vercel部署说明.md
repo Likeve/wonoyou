@@ -16,6 +16,7 @@
 - Vercel 项目：`kvs-projects-27dae651/inou`。
 - 数据服务：Upstash Redis，`upstash-kv-coral-feather`，当前为 Free 方案。
 - 静态前端：Vite + React + PWA；`api/backend.js` 导出 Node HTTP Server，承接 `/api/*` 和 `/signal`。
+- 正式构建的账号请求通过同源 `/supabase/*` 由 Vercel 反向代理到固定 Supabase 项目，浏览器不需要直接连接 `*.supabase.co`。
 - 本地默认服务仍使用 SQLite；Vercel 服务使用 Redis，不读写本机 `.data`。
 - Redis 保存设备公钥、昵称、好友/封禁关系、推送订阅端点，以及有过期时间的认证、限流、在线状态和加密信箱。昵称仅用于加好友前的身份确认；聊天正文、图片、身份私钥和备份口令不进入这些数据结构。
 - 信令通过 Redis Pub/Sub 实时转发；不使用消息队列、Streams 或历史消息存储。对方不在线时，消息用双方设备密钥派生的会话密钥加密后暂存信箱（仅密文），并通过 Web Push 提醒对方。

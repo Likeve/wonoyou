@@ -74,6 +74,13 @@ test("browser security policy permits the configured Supabase account service", 
     .flatMap((entry) => entry.headers || [])
     .find((header) => header.key === "Content-Security-Policy")?.value || "";
   assert.ok(policy.includes("connect-src 'self' " + supabaseOrigin + " wss:"));
+  assert.deepEqual(
+    config.rewrites.find((entry) => entry.source === "/supabase/:path*"),
+    {
+      source: "/supabase/:path*",
+      destination: supabaseOrigin + "/:path*",
+    },
+  );
 });
 test("invalid proof and replayed challenge are rejected", async () => {
   const keys = await webcrypto.subtle.generateKey(

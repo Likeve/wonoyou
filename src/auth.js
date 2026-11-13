@@ -5,8 +5,17 @@ export { generateRecoveryPhrase } from "./recovery.js";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const localHost =
+  typeof location !== "undefined" &&
+  (location.hostname === "localhost" || location.hostname === "127.0.0.1");
+// Production browsers use the app origin as a reverse proxy. Some desktop
+// networks cannot reach *.supabase.co directly, while the Vercel edge can.
+const clientUrl =
+  url && import.meta.env.PROD && typeof location !== "undefined" && !localHost
+    ? `${location.origin}/supabase`
+    : url;
 
-export const supabase = url && anonKey ? createClient(url, anonKey) : null;
+export const supabase = clientUrl && anonKey ? createClient(clientUrl, anonKey) : null;
 
 export const hasSupabase = () => !!supabase;
 
