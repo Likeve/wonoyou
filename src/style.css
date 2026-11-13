@@ -1655,3 +1655,4 @@ input::placeholder {
 .update-check { margin-top: 16px; }
 .spinning { animation: update-spin 1s linear infinite; }
 @keyframes update-spin { to { transform: rotate(360deg); } }
+.auth-notice { color: #237a4b; background: #effaf3; border-radius: 8px; padding: 12px; font-size: 14px; line-height: 1.6; }

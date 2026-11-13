@@ -61,7 +61,6 @@ import {
   signOut,
   readableAuthError,
   generateRecoveryPhrase,
-  storeRecovery,
   requestRecovery,
 } from "./auth";
 import "./style.css";
@@ -228,6 +227,7 @@ function App() {
   const [auth, setAuth] = useState("loading"),
     [authMode, setAuthMode] = useState("register"),
     [authError, setAuthError] = useState(""),
+    [authNotice, setAuthNotice] = useState(""),
     [authBusy, setAuthBusy] = useState(false),
     [accountName, setAccountName] = useState(""),
     [username, setUsername] = useState(genUsername),
@@ -553,20 +553,22 @@ function App() {
       password = String(data.get("password") || ""),
       confirm = String(data.get("confirm") || ""),
       phrase = String(data.get("phrase") || "").trim().replace(/\s+/g, " ");
-    if (!name) {
+    if (authMode !== "recover" && !name) {
       setAuthError("请输入用户名");
       return;
     }
     setAuthBusy(true);
     setAuthError("");
+    setAuthNotice("");
     (async () => {
       try {
         if (authMode === "recover") {
           if (!phrase) throw Error("请输入找回密钥");
           if (password.length < 6) throw Error("新密码至少需要 6 位");
           if (password !== confirm) throw Error("两次输入的新密码不一致");
-          await requestRecovery(name, phrase, password);
-          flash("密码已重置，请用新密码登录");
+          const recovered = await requestRecovery(phrase, password);
+          setUsername(recovered.username);
+          setAuthNotice("密码已重置，已填入你的账号，请用新密码登录。");
           setAuthMode("login");
           return;
         }
@@ -577,7 +579,8 @@ function App() {
           const r = await signIn(name, password);
           userIdRef.current = r.user?.id || "";
         } else {
-          const r = await signUp(name, password);
+          const words = generateRecoveryPhrase();
+          const r = await signUp(name, password, words.join(" "));
           if (!r.session) {
             setAuthError(
               "注册未完成：请在 Supabase 的 Authentication → Email 中关闭「Confirm email」，因为本应用不发送邮件。",
@@ -585,8 +588,6 @@ function App() {
             return;
           }
           userIdRef.current = r.user?.id || "";
-          const words = generateRecoveryPhrase();
-          await storeRecovery(name, words.join(" ")).catch(() => {});
           setRecoveryPhrase(words.join(" "));
           setAuth("signedIn");
           setAccountName(name);
@@ -657,16 +658,16 @@ function App() {
               {authMode === "login"
                 ? "登录 INOU"
                 : authMode === "recover"
-                  ? "找回密码"
+                  ? "找回账号"
                   : "注册账号"}
             </h2>
             <p className="muted">
               {authMode === "recover"
-                ? "输入用户名和注册时保存的 8 个找回词。"
+                ? "输入注册时保存的 8 个找回词，即可设置新密码，无需用户名。"
                 : "用户名登录，聊天记录只保存在本机。"}
             </p>
-            <form onSubmit={handleAccountAuth}>
-              <label>
+            <form key={authMode} onSubmit={handleAccountAuth}>
+              {authMode !== "recover" && <label>
                 用户名
                 <span className="username-row">
                   <input
@@ -688,7 +689,7 @@ function App() {
                     </button>
                   )}
                 </span>
-              </label>
+              </label>}
               {authMode === "recover" && (
                 <label>
                   找回密钥（8 个词，用空格隔开）
@@ -726,6 +727,7 @@ function App() {
                   />
                 </label>
               )}
+              {authNotice && <p role="status" className="auth-notice">{authNotice}</p>}
               {authError && (
                 <div role="alert" className="error">
                   {authError}
@@ -745,6 +747,7 @@ function App() {
               onClick={() => {
                 setAuthMode(authMode === "recover" ? "login" : authMode === "login" ? "register" : "login");
                 setAuthError("");
+                setAuthNotice("");
               }}
             >
               {authMode === "login"
@@ -759,9 +762,10 @@ function App() {
                 onClick={() => {
                   setAuthMode("recover");
                   setAuthError("");
+                  setAuthNotice("");
                 }}
               >
-                忘记密码？用找回密钥重置
+                找回账号 / 重置密码
               </button>
             )}
           </div>

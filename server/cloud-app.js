@@ -1,9 +1,10 @@
 import express from "express";
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, webcrypto, createHmac, createHash } from "node:crypto";
+import { randomBytes, randomUUID, webcrypto, createHmac } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { resolve } from "node:path";
 import { createRedisStore, digest } from "./redis-store.js";
+import { createRecoveryHandler } from "./recovery.js";
 import { installGroups } from "./groups.js";
 import { sendPush } from "./push.js";
 
@@ -73,44 +74,7 @@ export function createCloudApp({
     await store.createSession(token, device, displayName);
     res.json({ token, id: device.id });
   });
-  app.post("/api/recover", async (req, res) => {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return fail(res, 503, "找回功能未配置");
-    const ip = process.env.VERCEL
-      ? req.headers["x-vercel-forwarded-for"] || req.socket.remoteAddress
-      : req.socket.remoteAddress;
-    if (await store.limited("recover:" + ip, 20)) return fail(res, 429, "尝试过多，请稍后再试");
-    const username = String(req.body?.username || "").trim();
-    const phrase = String(req.body?.phrase || "").trim().replace(/\s+/g, " ");
-    const password = String(req.body?.password || "");
-    if (!username || !phrase || username.length > 64 || phrase.length > 256) return fail(res, 400, "参数无效");
-    if (password.length < 6 || password.length > 200) return fail(res, 400, "新密码至少需要 6 位");
-
-    const email =
-      createHash("sha256").update("inou-username:" + username).digest("hex").slice(0, 48) + "@inou.app";
-    const base = supabaseUrl.replace(/\/$/, "");
-    const headers = { apikey: serviceKey, Authorization: "Bearer " + serviceKey, "Content-Type": "application/json" };
-    let user = null;
-    for (let page = 1; page <= 20 && !user; page++) {
-      const r = await fetch(`${base}/auth/v1/admin/users?page=${page}&per_page=200`, { headers });
-      if (!r.ok) return fail(res, 502, "身份服务暂不可用");
-      const data = await r.json();
-      const users = Array.isArray(data.users) ? data.users : [];
-      user = users.find((u) => u.email === email) || null;
-      if (users.length < 200) break;
-    }
-    if (!user) return fail(res, 400, "用户名不存在");
-    const expected = createHash("sha256").update("recovery:" + username + ":" + phrase).digest("hex");
-    if (user.user_metadata?.recovery !== expected) return fail(res, 400, "找回密钥不正确");
-    const update = await fetch(`${base}/auth/v1/admin/users/${user.id}`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ password }),
-    });
-    if (!update.ok) return fail(res, 502, "密码重置失败，请稍后再试");
-    res.json({ ok: true });
-  });
+  app.post("/api/recover", createRecoveryHandler({ limited: (...args) => store.limited(...args) }));
   app.use("/api", async (req, res, next) => {
     const id = await store.session(req.headers.authorization?.replace(/^Bearer /, ""));
     if (!id) return fail(res, 401, "请重新连接");
