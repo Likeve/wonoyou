@@ -64,6 +64,10 @@ export class ChatEngine {
     };
     navigator.serviceWorker?.addEventListener("message", this.swMessage);
     this.fetchMailbox().catch(() => {});
+    // The browser subscription can outlive the server record or a deployment.
+    // Re-register it on every start so background notifications self-heal.
+    if (typeof Notification !== "undefined" && Notification.permission === "granted")
+      this.subscribePush().catch(() => {});
     this.timer = setInterval(() => this.tick().catch(() => {}), 5000);
     this.network = () => this.tick().catch(() => {});
     window.addEventListener("online", this.network);
@@ -92,6 +96,7 @@ export class ChatEngine {
       this.iceServers = ice.iceServers;
       this.relayConfigured = ice.relayConfigured;
       this.vapidPublicKey = ice.vapidPublicKey || "";
+      this.emit();
       const ws = new WebSocket(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/signal`,
       );

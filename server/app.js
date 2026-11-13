@@ -271,7 +271,8 @@ export function createApp({
     if (!row) return;
     let subscription;
     try { subscription = JSON.parse(row.payload); } catch { return; }
-    if (!(await sendPush(subscription, payload)))
+    const delivery = await sendPush(subscription, payload);
+    if (delivery.expired)
       db.prepare("DELETE FROM pushes WHERE owner=?").run(id);
   };
   app.post("/api/push/subscribe", (req, res) => {

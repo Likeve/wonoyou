@@ -11,17 +11,28 @@ export function vapidKeys() {
   };
 }
 
+export function pushFailure(error) {
+  const status = Number(error?.statusCode);
+  return {
+    sent: false,
+    // 404/410 mean the push endpoint is permanently invalid. Temporary
+    // upstream failures must not erase a subscription that can recover.
+    expired: status === 404 || status === 410,
+  };
+}
+
 export async function sendPush(subscription, payload) {
   const keys = vapidKeys();
-  if (!keys || !subscription?.endpoint || !subscription?.keys?.p256dh) return false;
+  if (!keys || !subscription?.endpoint || !subscription?.keys?.p256dh)
+    return { sent: false, expired: false };
   webpush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
   try {
     await webpush.sendNotification(
       { endpoint: subscription.endpoint, keys: subscription.keys },
       JSON.stringify(payload),
     );
-    return true;
-  } catch {
-    return false;
+    return { sent: true, expired: false };
+  } catch (error) {
+    return pushFailure(error);
   }
 }

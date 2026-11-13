@@ -157,7 +157,8 @@ export function createCloudApp({
   const notifyDevice = async (id, payload) => {
     const subscription = await store.pushGet(id);
     if (!subscription) return;
-    if (!(await sendPush(subscription, payload))) await store.pushDel(id);
+    const delivery = await sendPush(subscription, payload);
+    if (delivery.expired) await store.pushDel(id);
   };
   app.post("/api/push/subscribe", async (req, res) => {
     if (!validSubscription(req.body?.subscription)) return fail(res, 400, "订阅数据无效");
