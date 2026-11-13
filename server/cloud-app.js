@@ -4,6 +4,7 @@ import { randomBytes, randomUUID, webcrypto, createHmac, createHash } from "node
 import { WebSocketServer, WebSocket } from "ws";
 import { resolve } from "node:path";
 import { createRedisStore, digest } from "./redis-store.js";
+import { installGroups } from "./groups.js";
 import { sendPush } from "./push.js";
 
 const validId = (s) => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
@@ -124,7 +125,9 @@ export function createCloudApp({
   const refreshAll = () => Promise.all([...sockets.keys()].map(refresh));
   const eventHandler = async (event) => {
     if (stopping) return;
-    if (event.type === "signal") {
+    if (event.type === "groups-changed" || event.type === "mailbox-changed") {
+      for (const id of event.ids || []) send(sockets.get(id), { type: event.type });
+    } else if (event.type === "signal") {
       const ws = sockets.get(event.to);
       if (ws && await store.owns(event.to, ws.lease) && await store.related(event.from, event.to))
         send(ws, { type: "signal", from: event.from, payload: event.payload, signature: event.signature });
@@ -141,6 +144,7 @@ export function createCloudApp({
     // Preserve SDP/ICE ordering even when Redis permission checks take different times.
     eventQueue = eventQueue.then(() => eventHandler(event)).catch(() => {});
   });
+  installGroups(app, store, ids => store.publish({ type: "groups-changed", ids }));
   app.get("/api/contacts", async (req, res) => res.json({
     contacts: await store.contacts(req.deviceId), blocked: await store.blocked(req.deviceId),
   }));
@@ -204,22 +208,32 @@ export function createCloudApp({
     if (await store.limited("mailbox:" + req.deviceId, 120)) return fail(res, 429, "发送太频繁，请稍后再试");
     const to = normalizeId(req.body?.to);
     if (!validId(to) || !validBox(req.body?.box)) return fail(res, 400, "消息无效");
-    if (!(await store.related(req.deviceId, to))) return fail(res, 403, "只能发送给好友");
-    const envelope = { id: randomUUID(), from: req.deviceId, to, box: req.body.box, time: Date.now() };
+    const groupId = req.body.groupId;
+    if (groupId !== undefined) {
+      const g = typeof groupId === "string" && await store.group(groupId);
+      if (!g?.members.includes(req.deviceId) || !g.members.includes(to) || to === req.deviceId || await store.blockedPair(req.deviceId, to))
+        return fail(res, 403, "群成员权限无效");
+    } else if (!(await store.related(req.deviceId, to))) return fail(res, 403, "只能发送给好友");
+    const envelope = { id: randomUUID(), from: req.deviceId, to, ...(groupId ? { groupId } : {}), box: req.body.box, time: Date.now() };
     await store.mailboxPush(to, envelope);
+    await store.publish({ type: "mailbox-changed", ids: [to] });
     await notifyDevice(to, {
       title: "INOU",
       body: "你收到一条新消息",
-      data: { peer: req.deviceId },
+      data: { peer: groupId || req.deviceId },
       badge: await store.mailboxCount(to),
     });
     res.json({ ok: true, id: envelope.id });
   });
   app.get("/api/mailbox", async (req, res) => {
     const items = await store.mailboxList(req.deviceId);
-    res.json({ items: items.map(({ id, from, box }) => ({ id, from, box })) });
+    res.json({ items: items.slice(0, 200).map(({ id, from, box, groupId }) => ({ id, from, box, groupId })) });
   });
   app.post("/api/mailbox/ack", async (req, res) => {
+    if (Array.isArray(req.body?.ids)) {
+      await store.mailboxAck(req.deviceId, req.body.ids.filter(id => typeof id === "string").slice(0, 200));
+      return res.json({ ok: true });
+    }
     const count = Math.max(0, Math.min(200, Number(req.body?.count) || 0));
     if (count) await store.mailboxTake(req.deviceId, count);
     res.json({ ok: true });
@@ -295,7 +309,7 @@ export function createCloudApp({
     app.use(express.static(staticDir, { index: false }));
     app.get("/{*path}", (_, res) => res.sendFile(resolve(staticDir, "index.html")));
   }
-  app.use((err, req, res, next) => fail(res, err.status || 503, "服务暂不可用，请稍后重连"));
+  app.use((err, req, res, next) => fail(res, err.status || 503, err.status ? err.message : "服务暂不可用，请稍后重连"));
   return { app, server, store, async close() {
     stopping = true; clearInterval(timer);
     for (const [id, ws] of sockets) await store.release(id, ws.lease).catch(() => {});

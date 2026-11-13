@@ -1,9 +1,22 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+const build = process.env.INOU_BUILD_ID || new Date().toISOString();
+const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 export default defineConfig({
+  define: { __BUILD_ID__: JSON.stringify(build), __APP_VERSION__: JSON.stringify(version) },
   plugins: [
     react(),
+    { name: "inou-version", generateBundle() {
+      this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ build, version }) });
+    }, configureServer(server) {
+      server.middlewares.use("/version.json", (_, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(JSON.stringify({ build, version }));
+      });
+    } },
     VitePWA({
       strategies: "injectManifest",
       srcDir: "src",

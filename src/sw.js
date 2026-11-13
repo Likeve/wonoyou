@@ -1,3 +1,4 @@
+import { clientsClaim } from "workbox-core";
 import {
   cleanupOutdatedCaches,
   createHandlerBoundToURL,
@@ -7,8 +8,10 @@ import { NavigationRoute, registerRoute } from "workbox-routing";
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
-self.skipWaiting();
-self.clientsClaim();
+clientsClaim();
+self.addEventListener("message", event => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
 
 const cachedIndex = createHandlerBoundToURL("index.html");
 const networkFirst = async ({ request }) => {

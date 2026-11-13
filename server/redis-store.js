@@ -100,6 +100,34 @@ export function createRedisStore({ url, namespace = "inou-preview-v1" }) {
       checkTransaction(await tx.exec());
     },
     async unblock(id, peer) { await redis.srem(key("blocks:" + id), peer); },
+    async blockedPair(a, b) {
+      const flags = await Promise.all([redis.sismember(key("blocks:" + a), b), redis.sismember(key("blocks:" + b), a)]);
+      return flags.some(Boolean);
+    },
+    async group(id) { const raw = await redis.get(key("group:" + id)); return raw ? JSON.parse(raw) : null; },
+    async groups(id) {
+      const ids = await redis.smembers(key("groups:" + id));
+      if (!ids.length) return [];
+      return (await redis.mget(...ids.map(id => key("group:" + id)))).filter(Boolean).map(JSON.parse);
+    },
+    async saveGroup(g, revision) {
+      const ok = await evalScript(`
+        local raw=redis.call('GET',KEYS[1])
+        local rev=0
+        if raw then rev=cjson.decode(raw).revision end
+        if rev~=tonumber(ARGV[1]) then return 0 end
+        redis.call('SET',KEYS[1],ARGV[2])
+        for i=2,#KEYS do redis.call('SADD',KEYS[i],ARGV[3]) end
+        return 1`, ["group:" + g.id, ...g.members.map(id => "groups:" + id)], [revision, JSON.stringify(g), g.id]);
+      if (!ok) throw Object.assign(Error("群成员已更新，请重试"), { status: 409 });
+    },
+    async mailboxAck(id, ids) {
+      await evalScript(`local values=redis.call('LRANGE',KEYS[1],0,-1)
+        local wanted={} for i=1,#ARGV do wanted[ARGV[i]]=true end
+        for _,v in ipairs(values) do local ok,e=pcall(cjson.decode,v)
+          if ok and wanted[e.id] then redis.call('LREM',KEYS[1],1,v) end end
+        return 1`, ["mailbox:" + id], ids);
+    },
     async pushSet(id, subscription) {
       await redis.set(key("push:" + id), JSON.stringify(subscription), "EX", 2592000);
     },

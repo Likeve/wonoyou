@@ -1640,3 +1640,18 @@ input::placeholder {
   flex-shrink: 0;
   margin-top: 1px;
 }
+
+/* Group creation and membership use the existing settings/dialog layout. */
+.modal label textarea {
+  width: 100%; resize: vertical; min-height: 112px; box-sizing: border-box;
+  border: 1px solid #dce2dc; border-radius: 10px; padding: 12px;
+  font: inherit; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.group-members { max-height: 320px; overflow-y: auto; margin: 16px 0; }
+.group-member { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.group-member span { flex: 1; overflow-wrap: anywhere; }
+.group-member small, .sender-name { color: #788278; font-size: 12px; }
+.sender-name { display: block; margin: 0 0 5px 4px; }
+.update-check { margin-top: 16px; }
+.spinning { animation: update-spin 1s linear infinite; }
+@keyframes update-spin { to { transform: rotate(360deg); } }

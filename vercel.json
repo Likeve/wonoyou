@@ -19,6 +19,7 @@
       { "key": "Permissions-Policy", "value": "microphone=(), geolocation=()" },
       { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" }
     ]},
+    { "source": "/version.json", "headers": [{ "key": "Cache-Control", "value": "no-store" }] },
     { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
     { "source": "/api/:path*", "headers": [{ "key": "Cache-Control", "value": "no-store" }] }
   ]

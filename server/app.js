@@ -5,6 +5,7 @@ import { randomBytes, createHash, webcrypto, createHmac } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { installGroups } from "./groups.js";
 import { sendPush } from "./push.js";
 const hash = (s) => createHash("sha256").update(s).digest("hex");
 const normalizeId = (s) => String(s || "").toLowerCase().replace(/[^0-9a-f]/g, "");
@@ -26,6 +27,8 @@ export function createApp({
  CREATE TABLE IF NOT EXISTS relations(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));
  CREATE TABLE IF NOT EXISTS blocks(owner TEXT NOT NULL,peer TEXT NOT NULL,PRIMARY KEY(owner,peer));
  CREATE TABLE IF NOT EXISTS mailbox(id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL, created INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS groups_meta(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS group_members(group_id TEXT NOT NULL, device_id TEXT NOT NULL, PRIMARY KEY(group_id,device_id));
  CREATE TABLE IF NOT EXISTS pushes(owner TEXT PRIMARY KEY, payload TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS mailbox_owner ON mailbox(owner);`);
   if (
@@ -166,6 +169,24 @@ export function createApp({
     for (const id of sockets.keys())
       send(id, { type: "contacts", contacts: contacts(id) });
   };
+  const groupStore = {
+    limited,
+    device: (id) => { const d = db.prepare("SELECT * FROM devices WHERE id=?").get(id); return d && { name: d.name, publicKey: d.public_key }; },
+    blockedPair: blocked,
+    group: (id) => { const row = db.prepare("SELECT payload FROM groups_meta WHERE id=?").get(id); return row && JSON.parse(row.payload); },
+    groups: (id) => db.prepare("SELECT g.payload FROM groups_meta g JOIN group_members m ON m.group_id=g.id WHERE m.device_id=?").all(id).map(r => JSON.parse(r.payload)),
+    saveGroup: (g, revision) => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const current = groupStore.group(g.id);
+        if ((current?.revision || 0) !== revision) throw Object.assign(Error("群成员已更新，请重试"), { status: 409 });
+        db.prepare("INSERT INTO groups_meta VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload").run(g.id, JSON.stringify(g));
+        for (const id of g.members) db.prepare("INSERT OR IGNORE INTO group_members VALUES(?,?)").run(g.id, id);
+        db.exec("COMMIT");
+      } catch (e) { db.exec("ROLLBACK"); throw e; }
+    },
+  };
+  installGroups(app, groupStore, async ids => { for (const id of ids) send(id, { type: "groups-changed" }); });
   app.get("/api/contacts", (req, res) =>
     res.json({
       contacts: contacts(req.deviceId),
@@ -271,11 +292,17 @@ export function createApp({
     const to = normalizeId(req.body.to);
     if (!/^[0-9a-f]{64}$/.test(to) || !validBox(req.body.box))
       return error(res, 400, "消息无效");
-    if (!related(req.deviceId, to)) return error(res, 403, "只能发送给好友");
+    const groupId = req.body.groupId;
+    if (groupId !== undefined) {
+      const g = typeof groupId === "string" && groupStore.group(groupId);
+      if (!g?.members.includes(req.deviceId) || !g.members.includes(to) || to === req.deviceId || blocked(req.deviceId, to))
+        return error(res, 403, "群成员权限无效");
+    } else if (!related(req.deviceId, to)) return error(res, 403, "只能发送给好友");
     const envelope = {
       id: randomBytes(16).toString("hex"),
       from: req.deviceId,
       to,
+      ...(groupId ? { groupId } : {}),
       box: req.body.box,
       time: Date.now(),
     };
@@ -285,13 +312,14 @@ export function createApp({
       JSON.stringify(envelope),
       envelope.time,
     );
+    send(to, { type: "mailbox-changed" });
     const badge = db
       .prepare("SELECT COUNT(*) AS c FROM mailbox WHERE owner=?")
       .get(to).c;
     await notifyDevice(to, {
       title: "INOU",
       body: "你收到一条新消息",
-      data: { peer: req.deviceId },
+      data: { peer: groupId || req.deviceId },
       badge,
     });
     res.json({ ok: true, id: envelope.id });
@@ -304,12 +332,16 @@ export function createApp({
     for (const row of rows) {
       try {
         const e = JSON.parse(row.payload);
-        items.push({ id: e.id, from: e.from, box: e.box });
+        items.push({ id: e.id, from: e.from, box: e.box, groupId: e.groupId });
       } catch { /* ignore */ }
     }
     res.json({ items });
   });
   app.post("/api/mailbox/ack", (req, res) => {
+    if (Array.isArray(req.body?.ids)) {
+      for (const id of req.body.ids.slice(0, 200)) if (typeof id === "string") db.prepare("DELETE FROM mailbox WHERE owner=? AND id=?").run(req.deviceId, id);
+      return res.json({ ok: true });
+    }
     const count = Math.max(0, Math.min(200, Number(req.body?.count) || 0));
     if (count)
       db.prepare(
@@ -391,7 +423,7 @@ export function createApp({
     res.sendFile(resolve(staticDir, "index.html")),
   );
   app.use((err, req, res, next) =>
-    error(res, err.status || 500, "请求未完成，请重试"),
+    error(res, err.status || 500, err.status ? err.message : "请求未完成，请重试"),
   );
   return {
     app,

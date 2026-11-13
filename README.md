@@ -1,6 +1,6 @@
 # INOU
 
-微信式的一对一聊天 PWA 开发版。通过本地唯一身份码建立好友关系，聊天内容和图片只保存在双方设备。离线消息留在发送端，双方重新打开应用后再投递。
+支持一对一和群聊的 PWA 开发版。通过本地唯一身份码添加好友或邀请群成员；聊天正文和图片在设备上解密，服务器可暂存待收取的密文。
 
 ## 本地运行
 
@@ -29,6 +29,16 @@ npm start
 - 加密历史备份导出、密码校验、导入去重；备份不包含身份私钥或可执行待发任务。
 - 手机和桌面界面、图片预览、表情、联系人筛选、应用更新提示。
 
+## 群聊和检查更新（0.2.0）
+
+- 在聊天或通讯录页面点击“创建群聊”，填写群名称和至少一位其他用户的身份码。支持复制的 `INOU-…` 格式；多位成员每行一个，或用逗号分隔，当前最多 20 人。
+- 创建后，对方无需确认，在线时自动显示新群，离线时下次打开同步。群详情中任何成员都可以通过身份码继续邀请；不会因此自动互加好友。
+- 群消息按收件人分别加密后通过信箱投递；“已投递”表示服务器已接受所有收件人的密文，不代表所有成员已读。新增成员不补发入群前历史。群名称、成员身份和公钥属于服务器可见元数据。
+- 沿用现有 ECDH + AES-GCM 加密机制，本次没有实现 Double Ratchet。退群、移除成员和群管理员权限不在本次功能范围。
+- “我”页面最底部的“检查更新”会请求不缓存的 `version.json`。发现不同构建时先保存本机数据、等待 Service Worker 下载和激活，再刷新页面；不会清除身份或聊天记录。
+- 构建时自动生成唯一标识，因此即使版本号相同也能识别新的部署。必须一起部署前端、Service Worker、版本清单和后端，线上旧版本不会凭本地构建自动更新。
+- 群聊历史支持加密备份；导入备份不会恢复群成员权限或重新发送历史消息。
+
 ## 数据如何流动
 
 ```text
@@ -39,7 +49,7 @@ npm start
                   TURN 配置后可以实时中继加密网络数据
 ```
 
-本地服务器 SQLite 只有 devices、relations、blocks、mailbox、pushes 五张业务表；mailbox 只存端到端加密的消息密文，pushes 只存推送订阅端点。Vercel 后端改用 Redis 共享关系元数据与有过期时间的认证/在线状态，信令通过 Pub/Sub 实时转发，不落库。服务不提供消息明文保存、附件上传或历史查询接口。WebSocket 只转发好友间的信令，不接受聊天消息帧。昵称仅用于加好友前的身份确认；私钥、正文、图片和备份口令不上传 API。
+本地服务器 SQLite 保存 devices、relations、blocks、mailbox、pushes，以及 groups_meta、group_members 两张群元数据表；mailbox 只存端到端加密的消息密文，pushes 只存推送订阅端点。Vercel 后端改用 Redis 共享关系元数据与有过期时间的认证/在线状态，信令通过 Pub/Sub 实时转发，不落库。服务不提供消息明文保存、附件上传或历史查询接口。WebSocket 只转发好友间的信令，不接受聊天消息帧。昵称仅用于加好友前的身份确认；私钥、消息正文和图片的明文、备份口令不上传 API。
 
 离线信箱中的消息也是端到端加密：服务器只保存 AES-GCM 密文（iv + data），解密密钥由双方设备密钥经 ECDH 派生，服务器无法解出正文。推送通知只包含「有新消息」的提醒，不含内容。
 
@@ -47,7 +57,7 @@ npm start
 
 ## 手机安装与跨网络使用
 
-当前仍是 0.1 开发版，已完成 Vercel 云端适配与 Redis 接入，**尚未完成 iPhone 真机验收**。部署资源、环境变量和更新方式见 [Vercel 部署说明](docs/Vercel部署说明.md)。手机上的 localhost 指手机自身，不能用本机预览链接直接访问电脑。
+当前仍是 0.2 开发版，已完成 Vercel 云端适配与 Redis 接入，**尚未完成 iPhone 真机验收**。部署资源、环境变量和更新方式见 [Vercel 部署说明](docs/Vercel部署说明.md)。手机上的 localhost 指手机自身，不能用本机预览链接直接访问电脑。
 
 1. 将前端与 Node 服务以同一个 HTTPS 域名提供，反向代理需支持 `/signal` WebSocket Upgrade。
 2. 复制 `.env.example` 为 `.env`，填写 `APP_ORIGIN` 为完整 HTTPS origin。
@@ -59,7 +69,7 @@ npm start
 
 ## 当前阶段与 PRD 的差异
 
-这是 0.1 技术原型，不是已审计的生产即时通信服务。
+这是 0.2 技术原型，不是已审计的生产即时通信服务。
 
 - 传输使用浏览器标准 DTLS，加上身份签名的 SDP 信令。**尚未实现 PRD 中独立的应用层 Double Ratchet / 每消息棘轮加密**，也未经过独立密码评审；不宣称达到 Signal 的安全级别。
 - 本地存储目前是整库加密快照，适合验证流程；大量历史与附件需迁移到分记录加密事务库。PRD 的 10,000 条性能目标尚未验收。
@@ -89,3 +99,5 @@ npm audit
 - `docs/INOU_技术可行性与PRD.md`：产品边界和验收要求。
 
 官方参考：[WebRTC DataChannel 加密](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Using_data_channels)、[iOS 主屏幕 Web App](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/)、[WebKit 存储策略](https://webkit.org/blog/14403/updates-to-storage-policy/)。
+
+群聊回归：`node --test test/groups.test.js`。使用隔离 Redis 时设置 `TEST_REDIS_URL`，再执行 `INOU_TEST_GROUP_BACKEND=redis node --test test/groups.test.js`；完整 `npm test` 也会执行双实例群列表同步测试。`scripts/group-browser-smoke.js` 用 Playwright CLI `run-code` 验证三个独立浏览器身份，默认测试服务为 `127.0.0.1:8791`。

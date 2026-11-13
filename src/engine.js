@@ -20,6 +20,7 @@ export class ChatEngine {
     this.vault = vault;
     this.state = vault.state;
     this.state.relationOps ||= [];
+    this.state.groups ||= [];
     this.onChange = onChange;
     this.onError = onError;
     this.peers = new Map();
@@ -63,8 +64,8 @@ export class ChatEngine {
     };
     navigator.serviceWorker?.addEventListener("message", this.swMessage);
     this.fetchMailbox().catch(() => {});
-    this.timer = setInterval(() => this.tick(), 5000);
-    this.network = () => this.tick();
+    this.timer = setInterval(() => this.tick().catch(() => {}), 5000);
+    this.network = () => this.tick().catch(() => {});
     window.addEventListener("online", this.network);
   }
   async connect() {
@@ -86,6 +87,7 @@ export class ChatEngine {
       });
       if (!this.running) return;
       this.token = session.token;
+      await this.syncGroups();
       const ice = await this.api("ice");
       this.iceServers = ice.iceServers;
       this.relayConfigured = ice.relayConfigured;
@@ -109,6 +111,8 @@ export class ChatEngine {
             .then(() => this.mergeContacts(m.contacts))
             .catch((e) => this.onError(e.message));
         }
+        if (m.type === "groups-changed") this.syncGroups().then(() => this.fetchMailbox()).catch(e => this.onError(e.message));
+        if (m.type === "mailbox-changed") this.fetchMailbox().catch(e => this.onError(e.message));
         if (m.type === "signal") this.handleSignal(m).catch(() => {});
       };
       ws.onclose = () => {
@@ -381,7 +385,75 @@ export class ChatEngine {
     if (p.channel?.readyState === "open")
       p.channel.send(JSON.stringify({ type: "ack", id: m.id }));
   }
+  async syncGroups() {
+    if (this.groupsSync) return this.groupsSync;
+    this.groupsSync = (async () => {
+      const { groups } = await this.api("groups");
+      const next = [];
+      for (const group of groups) {
+        if (!group.members.some(m => m.id === this.state.identity.id)) continue;
+        let valid = true;
+        for (const m of group.members) if (await digest(from64(m.publicKey)) !== m.id) valid = false;
+        if (!valid) continue;
+        const old = this.state.groups.find(g => g.id === group.id);
+        next.push({ ...old, ...group, isGroup: true, active: true });
+      }
+      this.state.groups = [...next, ...this.state.groups.filter(old => !next.some(g => g.id === old.id)).map(g => ({ ...g, active: false }))];
+      await this.vault.save();
+      this.emit();
+    })().finally(() => { this.groupsSync = null; });
+    return this.groupsSync;
+  }
+  async createGroup(name, members, groupId) {
+    const result = await this.api(groupId ? `groups/${groupId}/members` : "groups", "POST", { name, members });
+    await this.syncGroups();
+    return result.group.id;
+  }
+  async sendGroup(peer, body, kind) {
+    const group = this.state.groups.find(g => g.id === peer);
+    if (!group?.active) throw Error("群聊不可用");
+    const message = { id: crypto.randomUUID(), peer, groupId: peer, sender: this.state.identity.id,
+      time: Date.now(), body, kind, status: "pending", recipients: group.members.filter(m => m.id !== this.state.identity.id).map(m => m.id), posted: [] };
+    if (!validMessage(message)) throw Error("消息格式或长度不支持");
+    const draft = this.state.drafts[peer];
+    this.state.messages.push(message);
+    delete this.state.drafts[peer];
+    try { await this.vault.save(); } catch (e) {
+      this.state.messages = this.state.messages.filter(m => m !== message);
+      this.state.drafts[peer] = draft;
+      throw e;
+    }
+    this.emit();
+    this.flushGroups().catch(e => this.onError(e.message));
+    return message;
+  }
+  async flushGroups() {
+    if (!this.token || this.sendingGroups) return;
+    this.sendingGroups = true;
+    try {
+      for (const m of this.state.messages.filter(m => m.groupId && m.status === "pending")) {
+        const g = this.state.groups.find(g => g.id === m.groupId);
+        if (!g?.active) continue;
+        for (const id of m.recipients || []) {
+          if (!this.running || m.status !== "pending" || !this.state.messages.includes(m)) break;
+          if (m.posted.includes(id)) continue;
+          const member = g.members.find(member => member.id === id);
+          if (!member) continue;
+          const box = await sealMailbox(this.state.identity, member.publicKey, {
+            id: m.id, body: m.body, kind: m.kind, time: m.time, from: this.state.identity.id, to: id, groupId: g.id,
+          });
+          await this.api("mailbox", "POST", { to: id, groupId: g.id, box });
+          m.posted.push(id);
+          await this.vault.save();
+        }
+        if (m.status === "pending" && m.recipients.every(id => m.posted.includes(id))) m.status = "sent";
+        await this.vault.save();
+        this.emit();
+      }
+    } finally { this.sendingGroups = false; }
+  }
   async send(peer, body, kind = "text") {
+    if (this.state.groups.some(g => g.id === peer)) return this.sendGroup(peer, body, kind);
     if (!this.state.contacts.find((c) => c.id === peer && c.active))
       throw Error("当前好友关系不可用");
     const m = {
@@ -484,36 +556,43 @@ export class ChatEngine {
   }
   async fetchMailbox() {
     if (!this.running || !this.token) return;
-    let d;
-    try {
-      d = await this.api("mailbox");
-    } catch {
-      return;
-    }
-    const items = d?.items;
+    if (this.fetchingMailbox) return this.fetchingMailbox;
+    this.fetchingMailbox = this.readMailbox().finally(() => { this.fetchingMailbox = null; });
+    return this.fetchingMailbox;
+  }
+  async readMailbox() {
+    await this.syncGroups();
+    const { items } = await this.api("mailbox");
     if (!Array.isArray(items) || !items.length) return;
+    const ack = [];
     for (const item of items) {
-      const c = this.state.contacts.find((x) => x.id === item.from && x.active);
+      const group = item.groupId && this.state.groups.find(g => g.id === item.groupId);
+      const c = item.groupId ? group?.members.find(m => m.id === item.from)
+        : this.state.contacts.find(c => c.id === item.from && c.active);
       if (!c?.publicKey) continue;
-      try {
-        const msg = await openMailbox(this.state.identity, c.publicKey, item.box);
-        if (!validMessage(msg) || msg.from !== item.from) continue;
-        const seen = item.from + ":" + msg.id;
-        if (!this.state.seen.includes(seen)) {
-          this.state.messages.push({
-            ...msg,
-            peer: item.from,
-            sender: item.from,
-            status: "received",
-          });
-          this.state.seen.push(seen);
-          await this.vault.save();
-        }
-      } catch {
-        // 解密失败的消息按丢弃处理，不再重试。
+      let msg;
+      try { msg = await openMailbox(this.state.identity, c.publicKey, item.box); }
+      catch { ack.push(item.id); continue; }
+      if (!validMessage(msg) || msg.from !== item.from ||
+        (item.groupId ? msg.groupId !== item.groupId || msg.to !== this.state.identity.id : !!msg.groupId)) {
+        ack.push(item.id); continue;
       }
+      const seen = (item.groupId ? item.groupId + ":" : "") + item.from + ":" + msg.id;
+      if (!this.state.seen.includes(seen)) {
+        const received = { id: msg.id, body: msg.body, kind: msg.kind, time: msg.time,
+          ...(item.groupId ? { groupId: item.groupId } : {}),
+          peer: item.groupId || item.from, sender: item.from, status: "received" };
+        this.state.messages.push(received);
+        this.state.seen.push(seen);
+        try { await this.vault.save(); } catch (e) {
+          this.state.messages = this.state.messages.filter(m => m !== received);
+          this.state.seen = this.state.seen.filter(s => s !== seen);
+          throw e;
+        }
+      }
+      ack.push(item.id);
     }
-    this.api("mailbox/ack", "POST", { count: items.length }).catch(() => {});
+    if (ack.length) await this.api("mailbox/ack", "POST", { ids: ack });
     this.emit();
   }
   async pushPermission() {
@@ -577,6 +656,8 @@ export class ChatEngine {
       this.fetchMailbox().catch(() => {});
     }
     await this.flushRelations();
+    await this.syncGroups();
+    await this.flushGroups();
     for (const [id, p] of this.peers) {
       if (p.channel?.readyState !== "open" && Date.now() - p.created > 20000)
         this.drop(id);

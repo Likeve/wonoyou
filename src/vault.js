@@ -286,6 +286,7 @@ export async function exportArchive(state, password) {
         name,
         remark,
       })),
+      groups: (state.groups || []).map(({ id, name, members, owner }) => ({ id, name, owner, members: members.map(({ id, name }) => ({ id, name })) })),
       messages: state.messages.map((m) => ({ ...m, status: "archived" })),
     }),
   };
@@ -312,10 +313,15 @@ export async function readArchive(file, password) {
   for (const c of data.contacts) {
     if (!c || !/^[a-f0-9]{64}$/.test(c.id)) throw Error("备份中的联系人无效");
   }
+  if (data.groups !== undefined && !Array.isArray(data.groups)) throw Error("备份中的群聊无效");
+  for (const g of data.groups || []) {
+    if (!g || !/^group-[a-f0-9-]{36}$/.test(g.id) || typeof g.name !== "string" || g.name.length > 32 ||
+      !Array.isArray(g.members) || g.members.length > 20 || g.members.some(m => !m || !/^[a-f0-9]{64}$/.test(m.id))) throw Error("备份中的群聊无效");
+  }
   for (const m of data.messages) {
     if (
       !validMessage(m) ||
-      !/^[a-f0-9]{64}$/.test(m.peer) ||
+      (!/^[a-f0-9]{64}$/.test(m.peer) && !(data.groups || []).some(g => g.id === m.peer && m.groupId === g.id)) ||
       !/^[a-f0-9]{64}$/.test(m.sender)
     )
       throw Error("备份中的消息无效");

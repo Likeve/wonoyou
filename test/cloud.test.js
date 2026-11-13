@@ -61,6 +61,15 @@ test("cloud: shared authentication, identity-code contacts, cross-instance signa
     const wsA = await connect(a, alice.token), wsB = await connect(b, friend.token);
     assert.equal((await request(b, "contacts", { token: alice.token })).contacts[0].online, true);
     assert.equal((await request(a, "contacts", { token: friend.token })).contacts[0].online, true);
+    const groupEvent = waitMessage(wsB, m => m.type === "groups-changed");
+    const createdGroup = await request(a, "groups", { method: "POST", token: alice.token, body: { name: "跨实例群", members: [friend.id] } });
+    assert.equal(createdGroup.status, 200);
+    await groupEvent;
+    assert.equal((await request(b, "groups", { token: friend.token })).groups[0].id, createdGroup.group.id);
+    const membershipEvent = waitMessage(wsA, m => m.type === "groups-changed");
+    assert.equal((await request(b, `groups/${createdGroup.group.id}/members`, { method: "POST", token: friend.token, body: { members: [stranger.id] } })).status, 200);
+    await membershipEvent;
+    assert.equal((await request(a, "groups", { token: stranger.token })).groups[0].members.length, 3);
     const received = waitMessage(wsB, m => m.type === "signal");
     const marker = "transient-signal-" + randomUUID();
     wsA.send(JSON.stringify({ type: "signal", to: friend.id, payload: marker, signature: "test" }));

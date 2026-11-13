@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Users,
   MessageCircle,
   ContactRound,
   UserRound,
@@ -39,6 +40,7 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
+import { APP_VERSION, checkForUpdate } from "./updates";
 import { registerSW } from "virtual:pwa-register";
 import {
   hasVault,
@@ -248,6 +250,7 @@ function App() {
     [preview, setPreview] = useState(null),
     [backupFile, setBackupFile] = useState(null),
     [update, setUpdate] = useState(null),
+    [checkingUpdate, setCheckingUpdate] = useState(false),
     [notif, setNotif] = useState(""),
     [emoji, setEmoji] = useState(false);
   const engine = useRef(null),
@@ -261,7 +264,8 @@ function App() {
     nearBottom = useRef(true),
     [newMessage, setNewMessage] = useState(false);
   const state = vault?.state,
-    contact = state?.contacts.find((c) => c.id === selected),
+    conversations = [...(state?.contacts || []), ...(state?.groups || [])],
+    contact = conversations.find((c) => c.id === selected),
     messages = state?.messages.filter((m) => m.peer === selected) || [];
   const isIOS =
       /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -319,10 +323,10 @@ function App() {
   }
   useEffect(() => {
     boot();
-    const updater = registerSW({
-      onNeedRefresh() {
-        setUpdate(() => updater);
-      },
+    registerSW({
+      onNeedRefresh() { setUpdate(true); },
+      // The explicit update action saves the vault and reloads this window.
+      onNeedReload() {},
     });
   }, []);
   const start = async (v) => {
@@ -353,14 +357,14 @@ function App() {
   useEffect(() => {
     if (!vault) return;
     const visibility = () => {
-      if (!document.hidden) engine.current?.tick();
+      if (!document.hidden) engine.current?.tick().catch(() => {});
     };
     document.addEventListener("visibilitychange", visibility);
     return () => document.removeEventListener("visibilitychange", visibility);
   }, [vault]);
   useEffect(() => {
     if (vault && selected && !document.hidden && nearBottom.current) {
-      const c = vault.state.contacts.find((c) => c.id === selected);
+      const c = [...vault.state.contacts, ...(vault.state.groups || [])].find((c) => c.id === selected);
       if (c) {
         c.lastRead = Date.now();
         vault.save().catch(() => {});
@@ -377,7 +381,7 @@ function App() {
     nearBottom.current = true;
     setNewMessage(false);
     setEmoji(false);
-    const c = state.contacts.find((c) => c.id === id);
+    const c = conversations.find((c) => c.id === id);
     if (c) {
       c.lastRead = Date.now();
       vault.save().catch(() => {});
@@ -391,7 +395,7 @@ function App() {
   useEffect(() => {
     if (!vault) return;
     const peer = new URLSearchParams(location.search).get("peer");
-    if (peer && state.contacts.some((c) => c.id === peer)) {
+    if (peer && conversations.some((c) => c.id === peer)) {
       choose(peer);
       history.replaceState(null, "", location.pathname);
     }
@@ -401,7 +405,7 @@ function App() {
     const unread = state.messages.filter(
       (m) =>
         m.sender !== state.identity.id &&
-        m.time > (state.contacts.find((c) => c.id === m.peer)?.lastRead || 0),
+        m.time > (conversations.find((c) => c.id === m.peer)?.lastRead || 0),
     ).length;
     if (unread > 0) navigator.setAppBadge(unread).catch(() => {});
     else if ("clearAppBadge" in navigator)
@@ -485,6 +489,27 @@ function App() {
       setPreview(null);
       flash("已添加好友");
     });
+  const submitGroup = (event, groupId) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const members = String(data.get("members") || "").split(/[\n,，;；]+/).map(v => v.trim()).filter(Boolean);
+    run(async () => {
+      const id = await engine.current.createGroup(String(data.get("name") || ""), members, groupId);
+      setView("chats");
+      choose(id);
+      setModal(null);
+      flash(groupId ? "成员已加入群聊" : "群聊已创建，已同步给成员");
+    });
+  };
+  const checkUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    setError("");
+    try {
+      if (!await checkForUpdate(vault)) flash("当前已是最新版本");
+    } catch (e) { setError(e.message || "检查更新失败，请稍后重试"); }
+    finally { setCheckingUpdate(false); }
+  };
   const persist = async () => {
     await vault.save();
     render((n) => n + 1);
@@ -507,9 +532,9 @@ function App() {
         nearBottom.current = true;
       });
   };
-  const active = state?.contacts.filter((c) => c.active) || [];
+  const active = conversations.filter((c) => c.active);
   const filtered =
-    state?.contacts
+    conversations
       .filter(
         (c) =>
           !c.blocked &&
@@ -518,7 +543,7 @@ function App() {
       .filter((c) => label(c).toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => {
         const last = (id) =>
-          state.messages.filter((m) => m.peer === id).at(-1)?.time || 0;
+          state.messages.filter((m) => m.peer === id).at(-1)?.time || conversations.find(c => c.id === id)?.created || 0;
         return last(b.id) - last(a.id);
       }) || [];
   const handleAccountAuth = (e) => {
@@ -889,7 +914,7 @@ function App() {
                   </button>
                 </form>
               ))}
-            <span className="dev-label">开发预览 0.1 · 请勿用于敏感通信</span>
+            <span className="dev-label">开发预览 {APP_VERSION} · 请勿用于敏感通信</span>
           </div>
         </main>
       </div>
@@ -937,6 +962,9 @@ function App() {
                   <ChevronRight size={18} />
                 </button>
               )}
+              <button className="add-row" onClick={() => openModal("createGroup")}>
+                <span><Users size={22} /></span><strong>创建群聊</strong><ChevronRight size={18} />
+              </button>
               <div className="list-heading">
                 {view === "contacts" ? "我的联系人" : "最近聊天"}
                 <span>
@@ -976,7 +1004,7 @@ function App() {
                           </div>
                           <div className="contact-copy">
                             <div>
-                              <strong>{label(c)}</strong>
+                              <strong>{c.isGroup && <Users size={14} />} {label(c)}</strong>
                               <time>{last ? time(last.time) : ""}</time>
                             </div>
                             <p>
@@ -985,7 +1013,7 @@ function App() {
                                 ? last.kind === "image"
                                   ? "[图片]"
                                   : last.body
-                                : "添加成功，打个招呼吧"}
+                                : c.isGroup ? `${c.members.length} 位成员 · 已加入群聊` : "添加成功，打个招呼吧"}
                             </p>
                           </div>
                         </button>
@@ -1089,8 +1117,13 @@ function App() {
                 <p>
                   对方不在线时，消息会加密暂存并提醒对方；内容始终端到端加密。
                 </p>
-                <small>开发预览 0.1</small>
+                <small>版本 {APP_VERSION}</small>
               </div>
+              <button className="settings-row update-check" disabled={checkingUpdate} onClick={checkUpdate}>
+                <RefreshCw className={checkingUpdate ? "spinning" : ""} />
+                <span>{checkingUpdate ? "正在检查并更新…" : "检查更新"}</span>
+                <ChevronRight />
+              </button>
             </div>
           )}
           <nav className="bottom-nav">
@@ -1136,7 +1169,7 @@ function App() {
                           : ""
                       }
                     />
-                    {!contact.active
+                    {contact.isGroup ? `${contact.members.length} 位成员 · 群聊` : !contact.active
                       ? "关系已结束"
                       : engine.current?.peers.get(selected)?.channel
                             ?.readyState === "open"
@@ -1163,12 +1196,12 @@ function App() {
               >
                 <div className="conversation-notice">
                   <LockKeyhole size={13} />{" "}
-                  消息通过加密连接传输，记录仅存双方设备
+                  {contact.isGroup ? "群消息加密投递，聊天记录保存在成员设备" : "消息通过加密连接传输，记录仅存双方设备"}
                 </div>
                 {messages.length === 0 && (
                   <div className="chat-start">
                     <Avatar large name={label(contact)} id={contact.id} />
-                    <h3>你和 {label(contact)} 已成为好友</h3>
+                    <h3>{contact.isGroup ? `欢迎加入 ${label(contact)}` : `你和 ${label(contact)} 已成为好友`}</h3>
                     <p>从一句问候开始吧。</p>
                   </div>
                 )}
@@ -1189,10 +1222,11 @@ function App() {
                       )}
                       <div className={"message " + (own ? "own" : "")}>
                         <Avatar
-                          name={own ? state.identity.name : label(contact)}
+                          name={own ? state.identity.name : contact.isGroup ? contact.members.find(member => member.id === m.sender)?.name || "群成员" : label(contact)}
                           id={m.sender}
                         />
                         <div className="bubble-wrap">
+                          {contact.isGroup && !own && <small className="sender-name">{contact.members.find(member => member.id === m.sender)?.name || "群成员"}</small>}
                           <div
                             className={
                               "bubble " +
@@ -1215,7 +1249,7 @@ function App() {
                               {m.status === "pending" ? (
                                 <>
                                   <Clock3 size={11} />
-                                  等待双方上线
+                                  {m.groupId ? "等待联网投递" : "等待双方上线"}
                                 </>
                               ) : m.status === "sent" ? (
                                 <>
@@ -1392,7 +1426,7 @@ function App() {
                   </span>
                   <span>
                     <MessageCircle />
-                    一对一私聊
+                    私聊与群聊
                   </span>
                 </div>
               </div>
@@ -1440,12 +1474,8 @@ function App() {
       {update && (
         <button
           className="update-banner"
-          onClick={() =>
-            run(async () => {
-              await vault.flush();
-              update(true);
-            })
-          }
+          disabled={checkingUpdate}
+          onClick={checkUpdate}
         >
           新版本已就绪，点击更新
         </button>
@@ -1473,6 +1503,33 @@ function App() {
             >
               <X />
             </button>
+            {(modal === "createGroup" || modal === "inviteGroup") && (
+              <form onSubmit={event => submitGroup(event, modal === "inviteGroup" ? contact?.id : undefined)}>
+                <div className="modal-icon"><Users /></div>
+                <h2>{modal === "createGroup" ? "创建群聊" : "邀请群成员"}</h2>
+                <p>输入对方的身份码，对方的聊天列表会自动显示这个群，无需确认。</p>
+                {modal === "createGroup" && <label>群名称<input name="name" required maxLength={32} placeholder="给群聊起个名字" /></label>}
+                <label>成员身份码<textarea name="members" required rows={4} placeholder="每行一个身份码，至少添加一位其他用户" /></label>
+                <small className="muted">最多 20 人；也可以用逗号分隔多个身份码。</small>
+                <button className="primary full" disabled={busy} type="submit">{busy ? "正在处理…" : modal === "createGroup" ? "创建并邀请" : "确认邀请"}</button>
+              </form>
+            )}
+            {modal === "detail" && contact?.isGroup && (
+              <>
+                <div className="modal-icon"><Users /></div>
+                <h2>{label(contact)}</h2>
+                <p>{contact.members.length} 位成员</p>
+                <div className="group-members">{contact.members.map(member => (
+                  <div className="group-member" key={member.id}>
+                    <Avatar name={member.name || "群成员"} id={member.id} />
+                    <span>{member.name || "群成员"}{member.id === state.identity.id ? "（我）" : ""}</span>
+                    {member.id === contact.owner && <small>群主</small>}
+                  </div>
+                ))}</div>
+                <button className="primary full" disabled={!contact.active} onClick={() => openModal("inviteGroup")}><UserPlus size={18} /> 通过身份码邀请</button>
+                <button className="settings-row" onClick={() => openModal("clear")}><Trash2 /><span>清空本机聊天记录</span><ChevronRight /></button>
+              </>
+            )}
             {modal === "add" && (
               <>
                 <div className="modal-icon">
@@ -1696,6 +1753,12 @@ function App() {
                               active: false,
                             });
                         }
+                        state.groups ||= [];
+                        for (const g of data.groups || []) {
+                          if (!state.groups.some(existing => existing.id === g.id)) state.groups.push({
+                            id: g.id, name: g.name, owner: g.owner, members: g.members.map(m => ({ id: m.id, name: String(m.name || "群成员").slice(0, 32) })), isGroup: true, active: false,
+                          });
+                        }
                         for (const m of data.messages) {
                           if (
                             !state.messages.some(
@@ -1739,7 +1802,7 @@ function App() {
                 </small>
               </>
             )}
-            {modal === "detail" && contact && (
+            {modal === "detail" && contact && !contact.isGroup && (
               <>
                 <Avatar large name={label(contact)} id={contact.id} />
                 <h2>{label(contact)}</h2>
